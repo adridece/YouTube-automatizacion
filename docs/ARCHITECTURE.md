@@ -33,18 +33,31 @@ frena Chrome; los temporizadores de pestañas ocultas sí, hasta 1/min). Una ala
 ## Flujo de una cuenta (`runBatch` en content.js)
 1. `CLAIM` → estado `batch_uN` (nuevo o reanudado con `prepareResume`).
 2. **Fase 1** `phaseImages`: instrucción al Agent (`sendWithRateLimit` → `sendAndConfirm`) → espera a que no quede
-   `flow-pending-tile` durante 5 s → renombrado (15 s) → hasta 2 rondas de "reformula" para las que falten.
-3. **Fase 2A** `phaseVideos`, por escena (≤ 2 intentos): adjuntar (`attachViaPlusMenu`; plan B "Animar") → prompt con
-   `ensureVideoDuration` → `sendAndConfirm` (aprueba ≤ 10 puntos; si > 10 rechaza y **para de generar** en esa cuenta) →
-   `waitForSceneVideo` (tile nuevo por diferencia, hasta 10 min). Si el coste ya se aprobó y algo falla → "revisar", sin repetir.
-4. **Fase 2B** `phaseDownloads`: por escena, `DL_ARM` → clic derecho → Descargar → resolución (con caída 1080p→720p) → sondeo de `DL_STATUS`.
+   `flow-pending-tile` durante 5 s → renombrado (40 s, nombres tolerantes: `imageTitleMatches`) → hasta N-1 rondas de "reformula" para las que falten.
+3. **Fase 2A** `phaseVideos` → `processSceneVideo`, por escena (hasta N intentos, 6 por defecto):
+   - `settleBeforeSend`: si Flow aún genera un vídeo anterior, se espera (nunca dos a la vez) y, si había una escena "a revisar",
+     se le asigna el vídeo que llegó tarde (`resolveReviewScenes`, solo si hay 1 vídeo sin dueño por escena a revisar).
+   - adjuntar (`attachViaPlusMenu`; plan B "Animar") **verificando** que la caja del Agent cambió (`composerSignature`): nunca se
+     envía un prompt de vídeo sin su imagen. Si el intento anterior no llegó a salir, la imagen sigue adjunta y no se repite.
+   - prompt = nota de duración (`buildDurationNote`) + `ensureVideoDuration` + recordatorio final (ya NO se pide renombrar).
+   - `sendAndConfirm` aprueba solo ≤ 10 puntos; si > 10 → "Rechazar" y reenvío remarcando 6 s (3 veces); si arranca SIN aviso
+     de coste → se termina ese y se para de generar (`CostError`).
+   - `waitForSceneVideo`: el tile NUEVO por diferencia antes/después, estable 3 s; si se acaba la espera pero Flow sigue
+     generando (tile pendiente o con %), se amplía 2 veces.
+   - **descarga inmediata** (`downloadScene`) en cuanto se identifica el vídeo: el archivo `<prefijo>_<NNN>.mp4` es seguro el de
+     esa escena.
+   - **Segunda vuelta** automática para escenas fallidas sin coste (bloqueo, coste > 10, técnico). Si quedan fallos técnicos:
+     `ReloadError` → se guarda el lote, F5, y `onPageLoad` lo reanuda solo (`resumeNow`, máx. 2 recargas por lote).
+4. **Fase 2B** `phaseDownloads`: solo lo que no se pudo descargar al generarse (o modos sin generación). `downloadScene` hace 3
+   intentos; en el último, si Flow no entregó el 1080p, pide 720p.
 5. `finishRun`: resumen en el log, notificación, `RUN_COMPLETE`.
 
 Modos (`genMode`): `paired` (normal) · `animationsOnly` (las imágenes ya existen) · `imagesOnly` · `dryRun` (ENSAYO: como
 `animationsOnly` pero en el aviso de coste pulsa "Rechazar"; 0 puntos) · `downloadTest` (asigna a las escenas los primeros vídeos
 que ya existen y ejecuta solo la Fase 2B; 0 puntos).
 
-`sendAndConfirm` devuelve `started | cost | rateLimit | noPoints | policy | genError | cancelled | approvedNoStart | noStart | error`.
+`sendAndConfirm` devuelve `started | cost | rateLimit | noPoints | policy | genError | cancelled | agentReplied | approvedNoStart | noStart | error`.
+`agentReplied`: el Agent escribió algo (p. ej. una pregunta) y lleva 3 min sin hacer nada → se reintenta (gratis).
 Tras pulsar generar espera 25 s; si el mensaje ya se envió o se aprobó el coste, hasta 8 min más **sin volver a pulsar**;
 si el texto sigue en la caja, un único segundo clic.
 

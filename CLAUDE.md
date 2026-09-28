@@ -42,7 +42,14 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (28 sep 2026 — v2.6.0, "Cerezium Autopilot")
+## Estado actual (28 sep 2026 — v2.7.0, "Cerezium Autopilot")
+v2.7 (tras la prueba real de la v2.6: el Agent renombra mal los vídeos → descargas cruzadas; un fallo en la cuenta 2 no se
+resolvió solo): **cada vídeo se descarga nada más generarse** (identificado por diferencia de tiles, nunca por nombre; nunca dos
+vídeos generándose a la vez); se verifica que la imagen quedó adjunta antes de enviar; **segunda vuelta automática** de las escenas
+fallidas sin coste y **F5 automático** ante fallos técnicos (máx. 2); espera ampliada si Flow sigue en cola; un vídeo que llega
+tarde se asigna a su escena. BUG_HISTORY #59–66 (SIN VERIFICAR en real). e2e: `misname`, `selfheal`, `agentreply`.
+
+### v2.6.0
 v2.6 (tras la prueba real de la v2.5): el icono abre la **ventanita** (popup) por defecto — el panel lateral estrechaba Flow y
 rompía la automatización; imágenes reconocidas aunque el Agent las nombre "Imagen 006"/"006.png"; vídeo a 12 puntos →
 "Rechazar" y reenvío remarcando los 6 s (hasta 3), nunca "Aprobar siempre"; si un vídeo empieza sin aviso de coste se para
@@ -78,7 +85,10 @@ sin foco → v2.4: rotación de formas de escribir/enviar. **Prueba real v2.4.0*
 - **Un fallo en una escena nunca aborta las demás**: marca la escena como fallida y sigue. La señal de parada
   (`StopError`, botón Detener) sí debe propagarse siempre; no la tragues en un `catch`.
 - **Nunca regenerar solo un vídeo cuyo coste ya se aprobó** (se marca "revisar"): repetirlo puede cobrar dos veces.
-- **El vídeo de una escena se identifica por diferencia de tiles** (antes/después), nunca por posición en el DOM.
+- **El vídeo de una escena se identifica por diferencia de tiles** (antes/después), nunca por posición en el DOM ni por el
+  nombre (el Agent renombra mal los vídeos). Se descarga **en cuanto aparece**, y nunca hay dos vídeos generándose a la vez.
+- **Nunca enviar un prompt de vídeo sin comprobar que su imagen quedó adjunta** (podría cobrar un vídeo sin referencia).
+- **Todo fallo que no cuesta puntos se reintenta solo** (segunda vuelta, F5 automático): el usuario no quiere resolver nada a mano.
 - **Descargas de una en una** para toda la extensión, asociadas a su escena en `background.js`; se comprueba el nombre final.
 - Las esperas usan `waitFor` (despierta con el DOM y con el latido del background): no uses `setInterval`/`sleep` fijos para esperar a Flow.
 - **El usuario no ve mensajes efímeros**: cada error debe quedar registrado de forma persistente y legible

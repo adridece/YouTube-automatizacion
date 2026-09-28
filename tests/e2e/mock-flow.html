@@ -14,6 +14,11 @@
   costSeq=12,10 (coste de cada envío de vídeo por orden; después, el normal),
   imgName=Imagen {n} (cómo renombra el Agent las imágenes; por defecto "{n}"),
   noConfirm=1 (como «Confirmar antes de generar = Nunca»: genera sin aviso de coste).
+  wrongRename=1 (el Agent pone a cada vídeo nuevo un nombre EQUIVOCADO, como en la prueba real v2.6),
+  shuffle=1 (los tiles nuevos aparecen en posiciones al azar de la cuadrícula),
+  brokenUntilReload=1 (el "+" y "Animar" no funcionan hasta que se recarga la página una vez).
+  Cada vídeo generado "sabe" de qué escena es (la imagen adjunta) y su descarga pesa 350000 + nº de escena
+  bytes: así la prueba comprueba que cada archivo es el vídeo CORRECTO.
 -->
 <style>
   body { margin: 0; font: 13px system-ui, sans-serif; background: #111; color: #ddd; display: flex; height: 100vh; }
@@ -94,10 +99,14 @@ function addTile(tag, name, src) {
     else { const i = document.createElement("img"); i.setAttribute("src", src || `/media/${uid()}.png`); t.appendChild(i); }
     const f = document.createElement("div"); f.className = "footer-title"; f.textContent = name; t.appendChild(f);
   }
-  grid.prepend(t); // SIM: los más recientes primero (el orden del DOM no es numérico)
+  if (P.get("shuffle") && tag === "flow-video-tile" && grid.children.length && !restoring) grid.insertBefore(t, grid.children[Math.floor(Math.random() * (grid.children.length + 1))] || null);
+  else grid.prepend(t); // SIM: los más recientes primero (el orden del DOM no es numérico)
   return t;
 }
 const bump = (k) => sessionStorage.setItem(k, String(+(sessionStorage.getItem(k) || 0) + 1));
+let restoring = false;
+bump("mockLoads");
+const broken = () => P.get("brokenUntilReload") && +(sessionStorage.getItem("mockLoads") || 0) < 2;
 
 // sendNeeds=enter: Flow simulado que IGNORA el clic/submit y solo envía con Enter.
 window.__sends = 0;
@@ -124,7 +133,10 @@ function doSend() {
   clearPrompt(); attachRow.innerHTML = "";
   if (/^Crea todas las imágenes|^Las imágenes con identificador/.test(text)) return genImages(text);
   window.__sends++;
-  if (att.length) return askVideoCost(text, att);
+  // Controles de la prueba: un vídeo NUNCA debe salir sin su imagen ni con dos.
+  if (att.length > 1) bump("mockMultiAttach");
+  if (!att.length && /segundos|Duration/i.test(text)) bump("mockVideoNoImage");
+  if (att.length) return askVideoCost(text, att[0]);
   say("No entiendo (simulador).");
 }
 
@@ -147,16 +159,19 @@ function genImages(text) {
   }, T.image);
 }
 
-function askVideoCost(text, att) {
+function askVideoCost(text, label) {
+  label = (String(label || "").match(/\d{3}/) || [""])[0];
   videoSends++;
   if (P.get("rateLimitVideo") === String(videoSends)) { say('Estás preguntando demasiado rápido. Ve más despacio e inténtalo de nuevo. <button>Reintentar</button>'); return; }
+  // agentQuestion=1: al 1.er vídeo el Agent CONTESTA con una pregunta y no genera nada.
+  if (P.get("agentQuestion") && videoSends === 1) { setTimeout(() => say("Antes de generar: ¿quieres que el movimiento de cámara sea más lento o más rápido? Dímelo y lo preparo."), 1500); return; }
   const seq = (P.get("costSeq") || "").split(",").filter(Boolean).map(Number);
   const cost = seq[videoSends - 1] || (P.get("cost") ? +P.get("cost") : /6\s*seconds?/i.test(text) ? 10 : 15);
   window.__lastVideoPrompt = text;
-  if (P.get("noConfirm")) { setTimeout(() => startVideo(text), 1200); return; }
-  setTimeout(() => askVideoCostDialog(text, cost), 1200); // SIM: la IA "piensa"
+  if (P.get("noConfirm")) { setTimeout(() => startVideo(text, label), 1200); return; }
+  setTimeout(() => askVideoCostDialog(text, cost, label), 1200); // SIM: la IA "piensa"
 }
-function askVideoCostDialog(text, cost) {
+function askVideoCostDialog(text, cost, label) {
   {
     const m = document.createElement("flow-permission-message");
     m.className = "msg";
@@ -169,36 +184,38 @@ function askVideoCostDialog(text, cost) {
       if (l === "Aprobar siempre") bump("mockApprovedAlways");
       bump("mockApproved");
       // dupCost=1: simula una petición DUPLICADA: tras aprobar sale otro aviso de coste.
-      if (P.get("dupCost") && !m.dataset.dup) { const txt0 = text; setTimeout(() => { const d = askVideoCostDialog(txt0, cost); d.dataset.dup = "1"; }, 800); }
-      startVideo(text);
+      if (P.get("dupCost") && !m.dataset.dup) { const txt0 = text; setTimeout(() => { const d = askVideoCostDialog(txt0, cost, label); d.dataset.dup = "1"; }, 800); }
+      startVideo(text, label);
     }));
     chat.appendChild(m);
     return m;
   }
 }
-function startVideo(text) {
+function startVideo(text, label) {
   {
       bump("mockStarted");
       sessionStorage.setItem("mockPendingVideo", "1");
+      sessionStorage.setItem("mockPendingLabel", label || "");
       const p = addTile("flow-pending-tile");
       const wantName = (text.match(/cambia el nombre de este vídeo exactamente a: (\S+)\)/) || [])[1];
       setTimeout(() => {
         p.remove();
         if (P.get("policyVideo") && videoSends <= +P.get("policyVideo")) { say("Esta generación de vídeo fue bloqueada por nuestras políticas de seguridad. No se te ha cobrado."); sessionStorage.setItem("mockPendingVideo", "0"); return; }
-        if (!P.get("hiddenStall")) { sessionStorage.setItem("mockPendingVideo", "0"); finalizeVideo(wantName); return; }
+        if (!P.get("hiddenStall")) { sessionStorage.setItem("mockPendingVideo", "0"); finalizeVideo(wantName, label); return; }
         // SIM del problema real: se queda "100%" y solo termina con la página
         // visible y fotogramas (rAF); al terminar se redibuja como tile NUEVO.
         const stuck = addTile("flow-video-tile", "100%");
         const iv = setInterval(() => {
           if (document.hidden) return;
-          requestAnimationFrame(() => { if (!stuck.isConnected) return; clearInterval(iv); stuck.remove(); sessionStorage.setItem("mockPendingVideo", "0"); finalizeVideo(wantName); });
+          requestAnimationFrame(() => { if (!stuck.isConnected) return; clearInterval(iv); stuck.remove(); sessionStorage.setItem("mockPendingVideo", "0"); finalizeVideo(wantName, label); });
         }, 500);
       }, T.video);
   }
 }
 
-function finalizeVideo(wantName) {
-  const t = addTile("flow-video-tile", "Animate " + uid());
+function finalizeVideo(wantName, label) {
+  const t = addTile("flow-video-tile", "Animate " + uid(), `/media/${uid()}${label ? "-s" + label : ""}.mp4`);
+  if (P.get("wrongRename")) setTimeout(() => { t.querySelector(".footer-title").textContent = "mundofut_001_0000"; }, 1000);
   assets.unshift({ name: "Animate", kind: "Vídeo", tile: t });
   // SIM: el Agent renombra el vídeo si se lo piden (salvo noRename=1).
   if (wantName && !P.get("noRename")) setTimeout(() => { t.querySelector(".footer-title").textContent = wantName; }, 1500);
@@ -208,6 +225,7 @@ function finalizeVideo(wantName) {
 function closeOverlay() { overlay.innerHTML = ""; }
 document.getElementById("plus").addEventListener("click", () => {
   closeOverlay();
+  if (broken()) return; // brokenUntilReload: el menú no se abre
   const pop = document.createElement("flow-add-menu-popover-content");
   const vp = document.createElement("cdk-virtual-scroll-viewport");
   const pane = document.createElement("flow-add-menu-detail-pane");
@@ -241,12 +259,15 @@ if (P.get("seed") && !saved.length && !sessionStorage.getItem("mockSeeded")) {
   const v = (m.match(/vid:(\d+)/) || [])[1];
   for (let i = 0; i < +(v || 0); i++) saved.push({ tag: "flow-video-tile", name: "Animate viejo " + i });
 }
+restoring = true;
 for (const t of saved) { const el = addTile(t.tag, t.name, t.src); assets.unshift({ name: t.name, kind: t.tag === "flow-video-tile" ? "Vídeo" : "Imagen", tile: el }); }
+restoring = false;
 // Un vídeo que se estaba generando al recargar aparece igualmente al rato (SIM).
 if (+(sessionStorage.getItem("mockPendingVideo") || 0) > 0) {
   sessionStorage.setItem("mockPendingVideo", "0");
   const p = addTile("flow-pending-tile");
-  setTimeout(() => { p.remove(); const t = addTile("flow-video-tile", "Animate " + uid()); assets.unshift({ name: "Animate", kind: "Vídeo", tile: t }); }, T.video);
+  const lbl = sessionStorage.getItem("mockPendingLabel") || "";
+  setTimeout(() => { p.remove(); const t = addTile("flow-video-tile", "Animate " + uid(), `/media/${uid()}${lbl ? "-s" + lbl : ""}.mp4`); assets.unshift({ name: "Animate", kind: "Vídeo", tile: t }); }, T.video);
 }
 
 // ---- menú contextual + descarga
@@ -262,6 +283,7 @@ grid.addEventListener("contextmenu", (e) => {
   overlay.appendChild(menu);
   menu.querySelectorAll("flow-menu-item").forEach((mi) => mi.addEventListener("click", () => {
     const t = mi.textContent;
+    if (t === "Animar" && broken()) return closeOverlay();
     if (t === "Animar") { const c = document.createElement("div"); c.className = "attached"; c.dataset.label = tile.querySelector(".footer-title").textContent; attachRow.appendChild(c); closeOverlay(); return; }
     if (t !== "downloadDescargar") return closeOverlay();
     const sub = document.createElement("div"); sub.className = "ctx"; sub.style.left = e.clientX + 170 + "px"; sub.style.top = e.clientY + "px";
@@ -273,7 +295,8 @@ grid.addEventListener("contextmenu", (e) => {
       // SIM: Flow prepara el archivo y lo entrega como blob con un nombre suyo,
       // liberando la URL al instante (el caso más difícil para la extensión).
       setTimeout(async () => {
-        const r = await fetch("/video.mp4?res=" + encodeURIComponent(o.textContent));
+        const sc = ((tile.querySelector("video") || { getAttribute: () => "" }).getAttribute("src") || "").match(/-s(\d{3})\.mp4$/);
+        const r = await fetch("/video.mp4?res=" + encodeURIComponent(o.textContent) + (sc ? "&scene=" + sc[1] : ""));
         const url = URL.createObjectURL(await r.blob());
         const a = document.createElement("a"); a.href = url; a.download = `caricature_footballer_${uid()}.mp4`;
         document.body.appendChild(a); a.click(); a.remove();

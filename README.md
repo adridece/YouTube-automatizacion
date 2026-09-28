@@ -42,6 +42,10 @@ Cada vídeo debe costar **10 puntos** (lo fija la duración: 6 s). La extensión
 el aviso pide ≤ 10. Si pide más (p. ej. 12), pulsa "Rechazar" (gratis) y vuelve a enviar el prompt remarcando los 6 segundos, hasta
 3 veces; si sigue pidiendo más, esa escena queda fallida (con su número en el log) y sigue con las demás.
 
+Desde la v2.7 **cada vídeo se descarga nada más generarse**, con su nombre (`mundofut_001.mp4`…), antes de pedir el siguiente: la
+extensión sabe cuál es porque es el vídeo nuevo que acaba de aparecer (no depende de cómo lo llame el Agent). Lo que falle sin
+gastar puntos se reintenta solo al final (y, si es un fallo técnico, la extensión recarga Flow y sigue sola).
+
 ## Primera prueba de la v2 (en este orden; las dos primeras cuestan 0 puntos)
 1. Recarga la extensión (⟳) y pulsa F5 en tus pestañas de Flow. Abre la ventanita (icono de la extensión).
 2. Salida → **Elegir** → Escritorio (o crea `Escritorio/MundoFut`). Debe poner "· con permiso".

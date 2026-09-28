@@ -1,6 +1,9 @@
 # Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.6.0)
 
 ## P0 — bloquea el uso real
+0000. **v2.7 en real** (lote completo): (a) cada vídeo se guarda justo después de generarse ("Guardado: …mundofut_00N.mp4") y es
+      el de su escena; (b) si algo falla, "Segunda vuelta automática" / "recarga automática" en el log; (c) que NUNCA salga
+      "la imagen no aparece adjunta en el panel del Agent" cuando sí se adjuntó (sería un falso negativo de la comprobación nueva).
 000. **v2.6 en real**: (a) el icono abre la ventanita (no el panel lateral) y la página de Flow no cambia de tamaño; (b) si un vídeo
      pide 12 puntos, el log dice "lo he RECHAZADO… reenvío 1/3" y el reenvío sale a 10; (c) **log de la cuenta 2** cuando diga que
      faltan imágenes: la línea "Nombres de imagen que veo en el proyecto: …" dirá cómo las llamó el Agent.
