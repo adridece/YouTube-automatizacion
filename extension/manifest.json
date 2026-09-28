@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "MUNDO FUT / Flow Batch Runner",
+  "version": "1.2.0",
+  "description": "Cola de prompts para Google Flow: genera imágenes/vídeos en lote y los descarga numerados (001, 002...).",
+  "permissions": ["storage", "downloads", "scripting", "activeTab", "tabs", "notifications"],
+  "host_permissions": ["https://flow.google.com/*", "https://labs.google/*"],
+  "icons": { "16": "icon.png", "48": "icon.png", "128": "icon.png" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Flow Batch Runner",
+    "default_icon": "icon.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://flow.google.com/*", "https://labs.google/fx/tools/flow/*"],
+      "js": ["shared.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

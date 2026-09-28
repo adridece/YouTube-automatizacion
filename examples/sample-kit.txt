@@ -1,0 +1,22 @@
+## 🖼️ PROMPTS DE IMAGEN
+
+```
+[001] ⭐ PORTADA — Extreme close-up of a caricature footballer, shocked face, vertical 9:16 composition, caricature illustration style, bold black outlines, no text, no watermark, no logo
+
+[002] Wide shot of a dusty neighborhood pitch at sunset, caricature illustration style, bold black outlines, no text, no watermark, no logo
+
+[003] Stadium crowd celebrating under floodlights, caricature illustration style, bold black outlines, no text, no watermark, no logo
+```
+
+## 🎬 PROMPTS DE ANIMACIÓN
+
+```
+[001] Animate this exact reference image, 6 seconds, vertical 9:16: slow zoom in on the face, sweat drops and camera flashes at the edges, maintain original cartoon caricature style and framing, consistent character, smooth motion, no morphing, no distortion of the face
+
+[002] Animate this exact reference image, 6 seconds, vertical 9:16: dust drifting across the pitch, slow dolly forward, warm light flickering, maintain original cartoon caricature style and framing, smooth motion, no morphing
+
+[003] Animate this exact reference image, 6 seconds, vertical 9:16: crowd waving flags, confetti falling, slow push in, maintain original cartoon caricature style and framing, smooth motion, no morphing
+```
+
+## 📊 NOTAS DE PRODUCCIÓN
+Esto NO es un prompt y el parser debe ignorarlo (aparece tras el último bloque).
