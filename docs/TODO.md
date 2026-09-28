@@ -1,6 +1,8 @@
 # Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.6.0)
 
 ## P0 — bloquea el uso real
+00000. **v2.8 en real**: que se guarden los 8 vídeos, cada uno con su escena. Si falla, el log dice qué método se usó (menú / fuente
+       directa) y si el tile tenía identificador estable ("Aviso técnico: …").
 0000. **v2.7 en real** (lote completo): (a) cada vídeo se guarda justo después de generarse ("Guardado: …mundofut_00N.mp4") y es
       el de su escena; (b) si algo falla, "Segunda vuelta automática" / "recarga automática" en el log; (c) que NUNCA salga
       "la imagen no aparece adjunta en el panel del Agent" cuando sí se adjuntó (sería un falso negativo de la comprobación nueva).

@@ -107,6 +107,18 @@ const SCENARIOS = {
     u2: "brokenUntilReload=1", u3: "",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, logHas: ["Segunda vuelta automática", "recarga automática 1/2", "Página recargada para recuperarme"] },
   },
+  placeholder: {
+    desc: "PRUEBA REAL v2.7: mientras se genera hay un tile PROVISIONAL (sin % ni Descargar) y al terminar Flow redibuja la cuadrícula: debe esperar al definitivo, reencontrarlo y guardar el vídeo correcto",
+    askWhereToSave: true, dest: "folder",
+    u2: "placeholderTile=1&videoMs=8000&wrongRename=1", u3: "placeholderTile=1&videoMs=8000",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true },
+  },
+  sourcedl: {
+    desc: 'El menú de los vídeos no tiene "Descargar": plan B, guardar directamente la fuente del vídeo (sin fallar ninguna)',
+    askWhereToSave: true, dest: "folder",
+    u2: "noMenuDownload=1&placeholderTile=1", u3: "noMenuDownload=1",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true, logHas: ["Plan B: guardo directamente la fuente del vídeo"] },
+  },
   agentreply: {
     desc: "El Agent contesta con una pregunta en vez de generar: a los 3 min sin actividad se apunta su respuesta y se reintenta solo",
     askWhereToSave: true, dest: "folder", timeoutMin: 9,
@@ -331,12 +343,17 @@ async function main() {
       res.setHeader("Content-Type", "video/mp4");
       return res.end(sc ? Buffer.alloc(350000 + parseInt(sc, 10), 7) : video);
     }
-    if (req.url.startsWith("/media/")) { res.statusCode = 404; return res.end(); }
+    if (req.url.startsWith("/media/")) {
+      // Fuente de un vídeo generado (descarga directa, plan B): mismo tamaño que su descarga.
+      const m = req.url.match(/-s(\d{3})\.mp4/);
+      if (m) { res.setHeader("Content-Type", "video/mp4"); return res.end(Buffer.alloc(350000 + parseInt(m[1], 10), 7)); }
+      res.statusCode = 404; return res.end();
+    }
     if (req.url.startsWith("/vendor-prosemirror.js")) { res.setHeader("Content-Type", "text/javascript"); return res.end(fs.readFileSync(path.join(__dirname, "vendor-prosemirror.js"))); }
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));
