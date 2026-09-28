@@ -258,13 +258,15 @@ $("start").addEventListener("click", async () => {
   const { images, animations } = splitCombinedPrompts(f.prompts);
   const accs = accounts(f);
   const problems = [];
-  if (!images.size) problems.push("No encuentro ningún prompt de imagen en el kit.");
+  const needsImages = ["paired", "imagesOnly"].includes(f.genMode);
+  const needsAnims = ["paired", "animationsOnly", "dryRun"].includes(f.genMode);
+  if (needsImages && !images.size) problems.push("No encuentro ningún prompt de imagen en el kit.");
   if (!accs.length) problems.push("Activa al menos una cuenta.");
   for (const a of accs) {
     if (!a.sceneNumbers.length) problems.push(`El rango de la cuenta ${a.label} («${esc(a.range)}») no es válido.`);
     if (!flowTabs.find((t) => getFlowAccountKey(t.url) === a.accountKey)) problems.push(`No hay ninguna pestaña de Flow abierta con /${a.accountKey.replace("u", "u/")}/.`);
   }
-  if (f.genMode !== "imagesOnly" && images.size && !animations.size) problems.push("El kit no trae prompts de animación (el 2.º bloque [001]…).");
+  if (needsAnims && !animations.size) problems.push("El kit no trae prompts de animación (el 2.º bloque [001]…).");
   if (problems.length) { showMsg(problems.map(esc).join("<br>"), true); return; }
 
   const unchecked = checklistItems().filter((it) => !it.auto && !checks[it.id]);

@@ -159,6 +159,15 @@ document.getElementById("plus").addEventListener("click", () => {
   }, 600);
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeOverlay(); });
+// seed=img:1-2,vid:2 → el proyecto ya tiene imágenes 001-002 y 2 vídeos (solo la 1.ª vez).
+if (P.get("seed") && !saved.length && !sessionStorage.getItem("mockSeeded")) {
+  sessionStorage.setItem("mockSeeded", "1");
+  const m = P.get("seed");
+  const r = (m.match(/img:(\d+)-(\d+)/) || []);
+  if (r.length) for (let n = +r[1]; n <= +r[2]; n++) saved.push({ tag: "flow-image-tile", name: String(n).padStart(3, "0") });
+  const v = (m.match(/vid:(\d+)/) || [])[1];
+  for (let i = 0; i < +(v || 0); i++) saved.push({ tag: "flow-video-tile", name: "Animate viejo " + i });
+}
 for (const t of saved) { const el = addTile(t.tag, t.name, t.src); assets.unshift({ name: t.name, kind: t.tag === "flow-video-tile" ? "Vídeo" : "Imagen", tile: el }); }
 // Un vídeo que se estaba generando al recargar aparece igualmente al rato (SIM).
 if (+(sessionStorage.getItem("mockPendingVideo") || 0) > 0) {

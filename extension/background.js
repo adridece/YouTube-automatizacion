@@ -266,9 +266,22 @@ async function ensureOffscreen() {
   await offscreenCreating;
 }
 
+// El documento offscreen puede tardar un instante en tener su listener tras
+// crearse (visto con dos cuentas a la vez): se reintenta antes de rendirse.
 async function offscreenCall(msg) {
-  await ensureOffscreen();
-  return chrome.runtime.sendMessage({ target: "offscreen", ...msg });
+  let lastErr = null;
+  for (let i = 0; i < 6; i++) {
+    await ensureOffscreen();
+    try {
+      const r = await chrome.runtime.sendMessage({ target: "offscreen", ...msg });
+      if (r !== undefined) return r;
+      lastErr = new Error("el escritor de archivos no respondió");
+    } catch (e) {
+      lastErr = e;
+    }
+    await new Promise((res) => setTimeout(res, 300 * (i + 1)));
+  }
+  throw lastErr;
 }
 
 // Descarga "propia" (con chrome.downloads) a la carpeta de descargas de Chrome.
@@ -401,8 +414,13 @@ async function jobStatus(jobId) {
     if (it && it.state === "in_progress" && !it.filename) {
       job.promptWarned = true;
       saveJob();
-      jlog("warn", 'Chrome parece estar mostrando el diálogo "Guardar como" (tienes activado "Preguntar dónde guardar cada archivo"). Con el destino "Carpeta elegida" no pasaría.');
+      jlog("warn", 'Chrome está mostrando el diálogo "Guardar como" (tienes activado "Preguntar dónde guardar cada archivo"). Contéstalo; con el destino "Carpeta elegida" no pasaría.');
+      notify(`Chrome pide "Guardar como" (${job.acc}, escena ${pad3(job.scene)})`, `Contesta el diálogo de Chrome para ${job.fileName}. Espero 2 minutos.`, true);
     }
+  }
+  if (job.status === "done" || job.status === "failed") {
+    job.collected = true;
+    saveJob();
   }
   return { status: job.status, result: job.result || null, urlKind: job.urlKind || null, downloadId: job.downloadId, promptWarned: !!job.promptWarned };
 }
@@ -449,8 +467,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true };
       }
       case "DL_ARM": {
-        const stale = job && Date.now() - job.armedAt > 8 * 60 * 1000;
-        if (job && !stale && job.status !== "done" && job.status !== "failed" && job.tabId !== tabId) return { ok: false, busy: true };
+        // El turno solo se libera cuando la pestaña dueña ha RECOGIDO el resultado
+        // (si no, otra cuenta podía quitárselo justo al terminar y la primera lo
+        // repetía → archivo duplicado "(1)", visto en la prueba e2e).
+        const stale = job && Date.now() - job.armedAt > 10 * 60 * 1000;
+        if (job && !stale && !job.collected && job.tabId !== tabId) {
+          const alive = await chrome.tabs.get(job.tabId).then(() => true, () => false);
+          if (alive) return { ok: false, busy: true };
+        }
         job = {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           tabId,

@@ -356,7 +356,7 @@ function pressRow(row) {
 //   cancelled        el Agent canceló
 //   approvedNoStart  se aprobó el coste pero no apareció nada a tiempo
 //   noStart / error  no se llegó a enviar
-async function sendAndConfirm({ maxPoints, onApproved }) {
+async function sendAndConfirm({ maxPoints, onApproved, dryRun }) {
   const genBtn = $(CONFIG.generateButtonSelector);
   if (!genBtn) return { type: "error", error: "no encuentro el botón de generar (flow-agent-panel flow-generate-icon-button)" };
   if (isDisabledBtn(genBtn)) {
@@ -376,6 +376,10 @@ async function sendAndConfirm({ maxPoints, onApproved }) {
     if (dlg) {
       if (!st.approved) {
         st.cost = dlg.cost;
+        if (dryRun) {
+          if (dlg.rejectRow) dlg.rejectRow.click();
+          return { type: "dryRun", cost: dlg.cost };
+        }
         if (dlg.cost === null || dlg.cost > maxPoints) {
           if (dlg.rejectRow) dlg.rejectRow.click();
           return { type: "cost", cost: dlg.cost };
@@ -662,8 +666,16 @@ async function phaseVideos(cfg) {
           if (box && promptText()) setEditableValue(box, "");
           await attachReferenceImage(n);
           await writePrompt(text);
-        }, { maxPoints: CONFIG.maxAllowedPointsPerVideo, onApproved: () => { s.videoApproved = true; saveBatch(); } });
+        }, { maxPoints: CONFIG.maxAllowedPointsPerVideo, dryRun: !!cfg.dryRun, onApproved: () => { s.videoApproved = true; saveBatch(); } });
 
+        if (res.type === "dryRun") {
+          const okCost = res.cost !== null && res.cost <= CONFIG.maxAllowedPointsPerVideo;
+          log(okCost ? "ok" : "warn", `ENSAYO: todo llegó hasta el aviso de coste (${res.cost === null ? "coste ilegible" : res.cost + " puntos"}${okCost ? ", se habría aprobado" : ", NO se habría aprobado"}). He pulsado "Rechazar": 0 puntos gastados.`);
+          await setStep(n, "video", "skipped", { error: `ensayo: aviso de coste de ${res.cost} puntos rechazado a propósito` });
+          await setStep(n, "download", "skipped");
+          outcome = "dry";
+          break;
+        }
         if (res.type === "cost") {
           throw new CostError(res.cost === null
             ? "no pude leer cuántos puntos pide el vídeo; lo rechacé por seguridad"
@@ -700,6 +712,7 @@ async function phaseVideos(cfg) {
         if (s.videoApproved) outcome = "review";
       }
     }
+    if (outcome === "dry") { await sleep(1500); continue; }
     if (outcome === "review") {
       await setStep(n, "video", "review", { error: `${lastError}. No lo repito solo para no gastar puntos dos veces: mira en Flow si se generó.` });
       log("error", `Vídeo a REVISAR: ${lastError}. No lo repito para no cobrar dos veces.`);
@@ -767,7 +780,7 @@ async function downloadOne(n, tile, kind, cfg, mode) {
     const t0 = Date.now();
     let createdAt = null;
     let lastNote = t0;
-    let promptNoted = false;
+    let promptNoted = 0;
     for (;;) {
       throwIfStopped();
       const st = await send({ type: "DL_STATUS", jobId: arm.jobId });
@@ -779,8 +792,13 @@ async function downloadOne(n, tile, kind, cfg, mode) {
       if (st.status === "failed") { finished = true; throw new Error(st.result && st.result.error ? st.result.error : "la descarga falló"); }
       if (st.status !== "armed" && !createdAt) createdAt = Date.now();
       if (st.promptWarned && !promptNoted) {
-        promptNoted = true;
+        promptNoted = Date.now();
         ui.setStatus('Chrome está pidiendo "Guardar como": contesta el diálogo o usa el destino "Carpeta elegida"', "warn");
+      }
+      if (promptNoted && Date.now() - promptNoted > 120000) {
+        const err = new Error('Chrome pidió "Guardar como" y nadie lo contestó en 2 min. Usa el destino "Carpeta elegida" o desactiva "Preguntar dónde guardar"');
+        err.noRetry = true;
+        throw err;
       }
       if (!createdAt && Date.now() - t0 > CONFIG.download.createdTimeoutMs) {
         throw new Error(`Chrome no registró ninguna descarga en ${CONFIG.download.createdTimeoutMs / 1000} s. Causas posibles: (1) Flow no terminó de preparar el archivo; (2) el clic en la resolución no hizo efecto; (3) Chrome retiene la descarga con un aviso de "descargar varios archivos" (permítelo en chrome://settings/content/automaticDownloads)${visibilityNote()}`);
@@ -813,9 +831,10 @@ async function phaseDownloads(cfg) {
 
   let mode = cfg.destMode === "folder" ? "folder" : "downloads";
   if (mode === "folder") {
-    const fs = await send({ type: "FS_STATUS" });
-    if (!fs || !fs.has || fs.perm !== "granted") {
-      const why = !fs ? "no pude consultar la carpeta" : !fs.has ? "no hay carpeta elegida" : `Chrome no da permiso de escritura (${fs.perm})`;
+    let fs = await send({ type: "FS_STATUS" });
+    if (!fs || fs.ok === false) { await sleep(2000); fs = await send({ type: "FS_STATUS" }); }
+    if (!fs || fs.ok === false || !fs.has || fs.perm !== "granted") {
+      const why = !fs || fs.ok === false ? `no pude consultar la carpeta (${(fs && fs.error) || "sin respuesta"})` : !fs.has ? "no hay carpeta elegida" : `Chrome no da permiso de escritura (${fs.perm})`;
       log("error", `No puedo usar la carpeta elegida (${why}). Descargo a Descargas/MundoFutFlow/${cfg.batchFolder}/ con Chrome: si tienes "Preguntar dónde guardar" activado, saldrá el diálogo. Para evitarlo: panel de la extensión → Salida → "Conceder acceso".`);
       send({ type: "NOTIFY", title: "Carpeta sin permiso", message: 'No pude escribir en la carpeta elegida. Abre el panel de la extensión y pulsa "Conceder acceso".', sticky: true });
       mode = "downloads";
@@ -857,6 +876,7 @@ async function phaseDownloads(cfg) {
           send({ type: "NOTIFY", title: "Sin permiso en la carpeta elegida", message: "Guardo en Descargas/MundoFutFlow. Abre el panel de la extensión y pulsa «Conceder acceso» para la próxima vez.", sticky: true });
         }
         log("warn", `Descarga fallida (intento ${attempt}/${CONFIG.download.attempts}): ${e.message}`);
+        if (e.noRetry) break;
         if (attempt < CONFIG.download.attempts) await sleep(3000);
       }
     }
@@ -880,6 +900,15 @@ async function finishRun(label) {
   const where = batch.config.destMode === "folder" ? `carpeta elegida/${batch.config.batchFolder}` : `Descargas/MundoFutFlow/${batch.config.batchFolder}`;
   ctxScene = null;
   ctxPhase = "run";
+  if (batch.config.genMode === "dryRun" && label === "completo") {
+    const reached = batch.order.filter((n) => /ensayo/.test(batch.scenes[n].error || ""));
+    const msg = `ENSAYO terminado en ${ACC}: ${reached.length}/${total} escenas llegaron hasta el aviso de coste y se rechazaron. 0 puntos gastados.${problems.length ? ` Fallaron antes: ${problems.map(pad3).join(", ")}.` : ""}`;
+    log(problems.length || reached.length < total ? "warn" : "ok", msg);
+    send({ type: "NOTIFY", title: `Ensayo ${ACC} terminado`, message: msg, sticky: problems.length > 0 });
+    send({ type: "RUN_COMPLETE", acc: ACC, summary: { doneCount: reached.length, total, problemScenes: problems } });
+    ui.setStatus(`Ensayo: ${reached.length}/${total} hasta el aviso de coste`, problems.length ? "warn" : "ok");
+    return;
+  }
   if (problems.length) {
     log("warn", `RESUMEN ${ACC} (${label}): ${sum.done.length}/${total} escenas completas en ${where}. A revisar: ${problems.map(pad3).join(", ")}.`);
     for (const n of problems) log("error", `Escena ${pad3(n)}: ${reasonOf(batch.scenes[n])}`, { scene: n });
@@ -894,6 +923,21 @@ async function finishRun(label) {
   });
   send({ type: "RUN_COMPLETE", acc: ACC, summary: { doneCount: sum.done.length, total, problemScenes: problems } });
   ui.setStatus(problems.length ? `Terminado con avisos (${problems.map(pad3).join(", ")})` : "Terminado ✅", problems.length ? "warn" : "ok");
+}
+
+// PRUEBA DE DESCARGA (0 puntos): asigna a las escenas del rango vídeos que
+// YA existen en el proyecto (los primeros de la cuadrícula) para probar la
+// Fase 2B de verdad: nombre, carpeta nueva, espera a que termine cada uno.
+async function pickExistingVideos() {
+  ctxPhase = "downloads";
+  const tiles = $$(CONFIG.videoTileTag).filter((t) => !/no se ha podido generar/i.test(t.textContent || ""));
+  log("info", `PRUEBA DE DESCARGA: hay ${tiles.length} vídeo(s) en la cuadrícula; uso los ${Math.min(tiles.length, batch.order.length)} primeros (no tienen por qué corresponder a esas escenas).`);
+  batch.order.forEach((n, i) => {
+    const t = tiles[i];
+    if (t) { videoElByScene.set(n, t); setSceneStep(batch, n, "video", "done", { videoKey: tileKey(t) }); }
+    else setSceneStep(batch, n, "video", "skipped", { error: "no hay tantos vídeos en el proyecto para la prueba" });
+  });
+  await saveBatch();
 }
 
 // Sin puntos o coste no permitido: lo que faltaba por generar queda marcado
@@ -921,7 +965,8 @@ async function runBatch(cfg, resumeState) {
   stopRequested = false;
   const isResume = !!resumeState;
   batch = resumeState ? prepareResume(resumeState) : createBatchState({ batchId: cfg.batchId || String(Date.now()), accountKey: ACC, sceneNumbers: cfg.sceneNumbers, config: cfg });
-  if (cfg.genMode === "animationsOnly" && !isResume) for (const n of batch.order) batch.scenes[n].image = "done";
+  if (cfg.genMode === "dryRun") cfg.dryRun = true;
+  if (["animationsOnly", "dryRun", "downloadTest"].includes(cfg.genMode) && !isResume) for (const n of batch.order) batch.scenes[n].image = "done";
   if (cfg.genMode === "imagesOnly" && !isResume) for (const n of batch.order) batch.scenes[n].video = "skipped";
   await saveBatch();
   send({ type: "HEARTBEAT", acc: ACC, on: true });
@@ -932,9 +977,10 @@ async function runBatch(cfg, resumeState) {
   try {
     const box = await tryWait(() => getPromptBox(), 30000, "la caja de prompt de Flow");
     if (!box) throw new Error("no encuentro la caja de prompt de Flow: ¿estás dentro de un proyecto?");
-    if (cfg.genMode !== "animationsOnly") await phaseImages(cfg, isResume);
+    if (["paired", "imagesOnly"].includes(cfg.genMode)) await phaseImages(cfg, isResume);
+    if (cfg.genMode === "downloadTest") await pickExistingVideos();
     let halt = null;
-    if (cfg.genMode !== "imagesOnly") {
+    if (["paired", "animationsOnly", "dryRun"].includes(cfg.genMode)) {
       try {
         await phaseVideos(cfg);
       } catch (e) {

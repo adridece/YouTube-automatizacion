@@ -65,6 +65,18 @@ const SCENARIOS = {
     u2: "", u3: "",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, sequential: true },
   },
+  dryrun: {
+    desc: "ENSAYO sin gastar: imágenes ya existentes, llega al aviso de coste y pulsa Rechazar (0 puntos)",
+    askWhereToSave: true, dest: "folder", genMode: "dryRun",
+    u2: "seed=img:1-2", u3: "seed=img:3-3",
+    expect: { u2: "done", u3: "done", scenes: { 1: "dss", 2: "dss", 3: "dss" }, approvals: { u2: 0, u3: 0 }, files: [], rejected: { u2: 2, u3: 1 } },
+  },
+  dltest: {
+    desc: "PRUEBA de descarga con vídeos que ya existen (0 puntos)",
+    askWhereToSave: true, dest: "folder", genMode: "downloadTest",
+    u2: "seed=vid:2&prepMs=3000", u3: "seed=vid:1",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 0, u3: 0 }, files: FILES },
+  },
   noautodl: {
     desc: "Chrome SIN permiso de descargas automáticas para flow.google.com (exploración de la causa de tus descargas)",
     askWhereToSave: true, dest: "folder", noAutoDownloads: true,
@@ -134,6 +146,7 @@ async function runScenario(name, sc, server) {
     await panel.fill("#accB_range", "3");
     await panel.check(`input[name=dest][value=${sc.dest}]`, { force: true });
     await panel.check(`input[name=runMode][value=${sc.runMode || "parallel"}]`, { force: true });
+    await panel.evaluate((m) => { const el = document.getElementById("genMode"); el.value = m; el.dispatchEvent(new Event("change", { bubbles: true })); }, sc.genMode || "paired");
     await sleep(500);
     await panel.screenshot({ path: path.join(OUT, `panel-lote-${name}.png`), fullPage: true });
     await panel.click("#start");
@@ -210,7 +223,7 @@ async function runScenario(name, sc, server) {
       check(`escena ${n}: imagen/vídeo/descarga = ${exp.join("/")}`, s && s.image === exp[0] && s.video === exp[1] && s.download === exp[2], s ? `${s.image}/${s.video}/${s.download}${s.error ? " · " + s.error.slice(0, 110) : ""}` : "sin estado");
     }
     check('"Aprobar" pulsado una vez por vídeo, nunca "Aprobar siempre"', c2.a === E.approvals.u2 && c3.a === E.approvals.u3 && c2.always + c3.always === 0, `u2=${c2.a} u3=${c3.a} siempre=${c2.always + c3.always}`);
-    if (E.rejected) check('"Rechazar" pulsado por coste excesivo', c3.rejected === E.rejected.u3, `u3 rechazos=${c3.rejected}`);
+    if (E.rejected) check('"Rechazar" pulsado las veces esperadas', c3.rejected === (E.rejected.u3 || 0) && c2.rejected === (E.rejected.u2 || 0), `u2 rechazos=${c2.rejected} u3 rechazos=${c3.rejected}`);
     check("las dos cuentas usan la MISMA carpeta nueva del lote", folder && b3 && b3.config.batchFolder === folder, folder);
     const names = Object.keys(files).sort();
     check(`archivos en ${sc.dest === "folder" ? "la carpeta elegida" : "Descargas/MundoFutFlow/<lote>"}: ${E.files.join(", ")}`, JSON.stringify(names) === JSON.stringify([...E.files].sort()) && names.every((f) => files[f] === 350000), JSON.stringify(files));
@@ -240,7 +253,7 @@ async function main() {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "cost", "sequential"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "cost", "sequential", "dryrun", "dltest"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));

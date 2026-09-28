@@ -50,7 +50,8 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 ## Botón "+" (adjuntar referencia)
 - **[V]** `flow-agent-panel flow-add-menu button` abre directamente el explorador de assets ("Todo" seleccionado). **No hace falta**
   pulsar ninguna opción del menú lateral (Todo/Imágenes/Vídeos/Voces/Caracteres/Subidas): ese clic extra era un bug.
-- **[V]** Items: `.cdk-overlay-container flow-add-menu-asset-item`, `textContent` = etiqueta + tipo (`"001Imagen"`). Lista virtualizada
+- **[V]** Items: `.cdk-overlay-container flow-add-menu-asset-item`, `textContent` = etiqueta + tipo (`"001Imagen"`) — por eso la
+  comparación exacta con "001" nunca coincidía en la v1; la v2 separa nombre y tipo (`parseAssetItemText`). Lista virtualizada
   (`cdk-virtual-scroll-viewport`), orden "Recientes", **mezcla imágenes y vídeos**, y a veces tarda >1 s en pintarse (sondear).
 - **[V]** Al clicar un item aparece la vista previa ("Vista previa de 001") y el botón "Añadir a petición":
   `.cdk-overlay-container flow-add-menu-detail-pane div.bottom-actions button`. Al pulsarlo el menú **se cierra solo** y aparece la
@@ -71,16 +72,29 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 
 ## Límites y errores del servicio
 - **[V]** "Estás preguntando demasiado rápido. Ve más despacio e inténtalo de nuevo." + botón "Reintentar" (devuelve el mensaje a la
-  caja; hay que volver a enviar). **Aún no se gestiona** (TODO P0).
+  caja; hay que volver a enviar). La v2 **no** pulsa "Reintentar" (podría ser uno viejo del historial): espera 30/60/120/240 s y
+  vuelve a adjuntar + escribir + enviar.
 - **[SUPUESTO]** Qué pasa al agotar los ~50 puntos diarios (mensaje/estado desconocido).
 
 ## Descargas
 - **[V-indirecto]** Descargar = clic derecho → Descargar → resolución. Es una descarga **nativa** de la página (no da URL).
-  La extensión guarda el nombre deseado en `chrome.storage.local.pendingRenameFilename` y `background.js` lo aplica en
-  `chrome.downloads.onDeterminingFilename` (ruta `MundoFutFlow/<nombre>`).
 - **[V]** Con el ajuste de Chrome "Preguntar dónde guardar cada archivo" activado, sale un diálogo con el nombre por
-  defecto de Flow (p. ej. "caricature…") → hay que desactivarlo.
-- **[SUPUESTO]** Que el renombrado funciona de extremo a extremo con ese ajuste desactivado (nunca se ha probado así).
+  defecto de Flow (p. ej. "caricature…").
+- **[SUPUESTO]** Si la descarga llega como `blob:` o como `https:` y cuánto tarda Flow en preparar 1080p. La v2 lo escribe en el
+  log ("Chrome ha registrado la descarga #N (URL tipo …, a los X s)") → pasarlo aquí en cuanto se vea.
+- **[SUPUESTO]** Atributos estables de `flow-video-tile` (la v2 usa `data-id`/`id` si existen, si no el `src` del `<video>`).
+  `tools/flow-diagnostic.js` → `cuadricula.primerosVideos` lo muestra.
+
+## Comportamiento de Chrome medido (Chromium 141, no depende de Flow)
+- **[V]** Con "Preguntar dónde guardar" **activado**, `chrome.downloads.download({saveAs:false})` **también** abre el diálogo: la
+  descarga se queda `in_progress` con `filename` vacío. No hay forma por código de saltárselo con la API de descargas.
+- **[V]** Cancelar la descarga en `chrome.downloads.onCreated` la deja `interrupted/USER_CANCELED` en milisegundos, antes del diálogo.
+  Así funciona el destino "Carpeta elegida": se cancela la nativa y el archivo se escribe con File System Access.
+- **[V]** Si hay un listener `onDeterminingFilename`, el `filename` pasado a `chrome.downloads.download` se ignora salvo que el
+  listener lo repita.
+- **[V]** `DownloadItem.byExtensionId` viene vacío en `onCreated` (sí aparece en `onDeterminingFilename`).
+- **[V]** Un content script puede leer con `fetch` una URL `blob:` creada por la página.
+- **[V]** Sin permiso de "descargas automáticas", la 2.ª y 3.ª descarga disparadas por la página (sin gesto del usuario) **no** se bloquearon.
 
 ## Entorno de herramientas
 - Claude in Chrome no puede navegar a `chrome://extensions` (permiso denegado) y no puede escribir contraseñas por el usuario.
