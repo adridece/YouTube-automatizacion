@@ -92,3 +92,128 @@ test("ensureVideoDuration: el coste depende de la duración del prompt (6 s = 10
   assert.strictEqual(S.ensureVideoDuration("slow zoom in", 6), "slow zoom in Duration: 6 seconds.");
   assert.strictEqual(S.ensureVideoDuration("", 6), "Duration: 6 seconds.");
 });
+
+// ---------------------------------------------------------------- v2
+test("buildVideoFilename: los tres formatos aceptados", () => {
+  assert.strictEqual(S.buildVideoFilename("prefijo", "mundofut", 1), "mundofut_001.mp4");
+  assert.strictEqual(S.buildVideoFilename("vid", "mundofut", 1), "vid1.mp4");
+  assert.strictEqual(S.buildVideoFilename("vid", "x", 12), "vid12.mp4");
+  assert.strictEqual(S.buildVideoFilename("num", "x", 7), "007.mp4");
+  assert.strictEqual(S.buildVideoFilename(undefined, "", 3), "clip_003.mp4");
+  assert.strictEqual(S.buildVideoFilename("prefijo", "a/b:c*", 2, "png"), "abc_002.png");
+});
+
+test("sanitizeName: quita caracteres prohibidos en Windows", () => {
+  assert.strictEqual(S.sanitizeName('Mundo Fut: "Messi"?'), "Mundo_Fut_Messi");
+  assert.strictEqual(S.sanitizeName("   ", "x"), "x");
+  assert.strictEqual(S.sanitizeName("fin..."), "fin");
+});
+
+test("buildBatchFolderName: carpeta nueva por lote con fecha y hora local", () => {
+  assert.strictEqual(S.buildBatchFolderName(new Date(2026, 8, 28, 9, 5), "mundofut"), "2026-09-28_0905_mundofut");
+  assert.strictEqual(S.buildBatchFolderName(new Date(2026, 0, 2, 23, 59), ""), "2026-01-02_2359_lote");
+});
+
+test("downloadNameMatches: acepta el sufijo (1) de Chrome y rutas de Windows", () => {
+  assert.ok(S.downloadNameMatches("C:\\Users\\a\\Downloads\\MundoFutFlow\\x\\mundofut_001.mp4", "mundofut_001.mp4"));
+  assert.ok(S.downloadNameMatches("/home/a/MundoFutFlow/mundofut_001 (1).mp4", "mundofut_001.mp4"));
+  assert.ok(!S.downloadNameMatches("/home/a/caricature_footballer.mp4", "mundofut_001.mp4"));
+  assert.ok(!S.downloadNameMatches("", "mundofut_001.mp4"));
+});
+
+test("isFlowDownloadCandidate / urlKind", () => {
+  assert.ok(S.isFlowDownloadCandidate({ url: "blob:https://flow.google.com/1234-abcd" }));
+  assert.ok(S.isFlowDownloadCandidate({ url: "https://storage.googleapis.com/x/video.mp4" }));
+  assert.ok(S.isFlowDownloadCandidate({ url: "https://lh3.googleusercontent.com/abc" }));
+  assert.ok(S.isFlowDownloadCandidate({ url: "https://cdn.example.com/v.mp4", referrer: "https://flow.google.com/u/2/project/x" }));
+  assert.ok(!S.isFlowDownloadCandidate({ url: "https://example.com/file.zip", referrer: "https://example.com/" }));
+  assert.strictEqual(S.urlKind("blob:https://flow.google.com/x"), "blob");
+  assert.strictEqual(S.urlKind("https://a/b"), "https");
+  assert.strictEqual(S.urlKind("data:video/mp4;base64,AA"), "data");
+});
+
+test("parseAssetItemText / findAssetMatches: '001Imagen' exacto, nunca un vídeo ni '0010'", () => {
+  assert.deepStrictEqual({ ...S.parseAssetItemText("001Imagen") }, { name: "001", kind: "image" });
+  assert.deepStrictEqual({ ...S.parseAssetItemText(" 001 Vídeo ") }, { name: "001", kind: "video" });
+  assert.deepStrictEqual({ ...S.parseAssetItemText("raro") }, { name: "raro", kind: null });
+  const texts = ["001Vídeo", "0010Imagen", "002Imagen", "001Imagen", "001Imagen"];
+  assert.deepStrictEqual(Array.from(S.findAssetMatches(texts, "001")), [3, 4]);
+  assert.deepStrictEqual(Array.from(S.findAssetMatches(texts, "003")), []);
+});
+
+test("diffNewKeys / pickNewVideoKey: el vídeo nuevo se elige por diferencia, no por posición", () => {
+  assert.deepStrictEqual(Array.from(S.diffNewKeys(["a", "b"], ["c", "a", "b"])), ["c"]);
+  assert.deepStrictEqual({ ...S.pickNewVideoKey(["c"], []) }, { key: "c", ambiguous: false });
+  assert.deepStrictEqual({ ...S.pickNewVideoKey(["c", "d"], ["c"]) }, { key: "d", ambiguous: false });
+  assert.deepStrictEqual({ ...S.pickNewVideoKey(["c", "d"], []) }, { key: "c", ambiguous: true });
+  assert.deepStrictEqual({ ...S.pickNewVideoKey([], []) }, { key: null, ambiguous: false });
+});
+
+test("detectNewSignals: solo cuentan los mensajes NUEVOS del Agent", () => {
+  const before = "Hola. Estás preguntando demasiado rápido. Ve más despacio e inténtalo de nuevo.";
+  const after1 = before + " ¿Quieres que empiece a generar 1 vídeo, que cuesta 10 puntos?";
+  assert.strictEqual(S.detectNewSignals(before, after1).rateLimit, 0);
+  const after2 = before + " Estás preguntando demasiado rápido. Ve más despacio.";
+  assert.strictEqual(S.detectNewSignals(before, after2).rateLimit, 1);
+  const pol = "[002]: Esta generación fue bloqueada por nuestras políticas de seguridad";
+  assert.strictEqual(S.detectNewSignals("", pol).policy, 1);
+  assert.strictEqual(S.detectNewSignals("", "Error No se ha podido generar esta imagen. No se te ha cobrado").genError, 1);
+  assert.strictEqual(S.detectNewSignals("", "He cancelado la generación del vídeo").cancelled, 1);
+  assert.strictEqual(S.detectNewSignals("", "No tienes suficientes créditos para continuar").noPoints, 1);
+  assert.strictEqual(S.detectNewSignals("", "cuesta 10 puntos").noPoints, 0);
+});
+
+test("backoffDelayMs: 30 s, 60 s, 120 s… con tope", () => {
+  assert.strictEqual(S.backoffDelayMs(1), 30000);
+  assert.strictEqual(S.backoffDelayMs(2), 60000);
+  assert.strictEqual(S.backoffDelayMs(3), 120000);
+  assert.strictEqual(S.backoffDelayMs(10), 300000);
+  assert.strictEqual(S.backoffDelayMs(2, 1000, 5000), 2000);
+});
+
+test("estado del lote: crear, avanzar, resumir", () => {
+  const st = S.createBatchState({ batchId: "b1", accountKey: "u2", sceneNumbers: [1, 2], config: {}, now: 1 });
+  assert.strictEqual(st.scenes[1].video, "pending");
+  S.setSceneStep(st, 1, "image", "done");
+  S.setSceneStep(st, 1, "video", "done", { videoKey: "k1" });
+  S.setSceneStep(st, 1, "download", "done", { file: "x/mundofut_001.mp4" });
+  S.setSceneStep(st, 2, "image", "done");
+  S.setSceneStep(st, 2, "video", "failed", { error: "bloqueado" });
+  S.setSceneStep(st, 2, "download", "skipped");
+  const sum = S.summarizeBatch(st);
+  assert.strictEqual(sum.total, 6);
+  assert.strictEqual(sum.finished, 6);
+  assert.strictEqual(sum.percent, 100);
+  assert.deepStrictEqual(Array.from(sum.done), [1]);
+  assert.deepStrictEqual(Array.from(sum.failed), [2]);
+  assert.strictEqual(st.scenes[1].videoKey, "k1");
+});
+
+test("prepareResume: nunca repite un vídeo cuyo coste ya se aprobó", () => {
+  const st = S.createBatchState({ batchId: "b", accountKey: "u3", sceneNumbers: [1, 2, 3], config: {} });
+  S.setSceneStep(st, 1, "video", "running", { videoApproved: true });
+  S.setSceneStep(st, 2, "video", "running", { videoApproved: false });
+  S.setSceneStep(st, 3, "download", "running");
+  st.status = "stopped";
+  S.prepareResume(st);
+  assert.strictEqual(st.scenes[1].video, "review");
+  assert.ok(st.scenes[1].error.includes("no lo repito"));
+  assert.strictEqual(st.scenes[2].video, "pending");
+  assert.strictEqual(st.scenes[3].download, "pending");
+  assert.strictEqual(st.status, "running");
+});
+
+test("formatLogEntry / logToText / appendCapped", () => {
+  const t = new Date(2026, 8, 28, 8, 43, 55).getTime();
+  const line = S.formatLogEntry({ t, acc: "u2", scene: 3, phase: "videos", level: "error", msg: "falló" });
+  assert.strictEqual(line, "08:43:55 [u2] [E003] [Vídeo] ERROR: falló");
+  assert.strictEqual(S.formatLogEntry({ t, level: "info", msg: "hola" }), "08:43:55 INFO: hola");
+  assert.ok(S.logToText([{ t, level: "ok", msg: "a" }], "CAB").startsWith("CAB\n08:43:55 OK: a"));
+  assert.deepStrictEqual(Array.from(S.appendCapped([1, 2, 3], [4, 5], 3)), [3, 4, 5]);
+});
+
+test("resolutionFallbacks", () => {
+  assert.deepStrictEqual(Array.from(S.resolutionFallbacks("1080p", "video")), ["1080p", "720p"]);
+  assert.deepStrictEqual(Array.from(S.resolutionFallbacks("720p", "video")), ["720p", "1080p"]);
+  assert.deepStrictEqual(Array.from(S.resolutionFallbacks("1080p", "image")), ["1K", "2K"]);
+});
