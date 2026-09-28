@@ -1,6 +1,9 @@
-# Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.0.0)
+# Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.2.0)
 
 ## P0 — bloquea el uso real
+0. **v2.2 en real**: (a) con el usuario en otra pestaña, ¿terminan los vídeos? (page-hook "despierto"); (b) ¿renombra el Agent
+   cada vídeo como `<prefijo>_<NNN>_<HHMM>`? (el log dice "y renombrado" o "El Agent no renombró"); (c) ¿arranca la cuenta
+   cuya pestaña nunca se vio?; (d) reintentos suavizados ante bloqueos.
 1. **Prueba real de extremo a extremo** con la v2 (rango `1-1` en una cuenta, luego `1-2`, luego el lote). Nunca se ha completado
    una en Flow real. Pasos exactos y qué traer: README → "Primera prueba de la v2".
 2. **Carpeta elegida en Chrome real**: comprobar que (a) el selector de carpetas deja elegir el Escritorio, (b) el documento

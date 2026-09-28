@@ -85,6 +85,17 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 - **[SUPUESTO]** Atributos estables de `flow-video-tile` (la v2 usa `data-id`/`id` si existen, si no el `src` del `<video>`).
   `tools/flow-diagnostic.js` → `cuadricula.primerosVideos` lo muestra.
 
+## Visto en la prueba real del 28 sep 2026 (log del usuario, v2.1.0)
+- **[V]** Con la pestaña de Flow oculta, el vídeo se queda "al 100%" y no termina hasta que el usuario entra en la pestaña.
+  Al terminar, Flow **redibuja** el tile (sale como tile nuevo).
+- **[V]** Una pestaña de Flow que nunca se ha visto puede no pintar la caja de prompt en 30 s.
+- **[V]** La vista previa del "+" (`flow-add-menu-detail-pane`) tiene como texto solo "Añadir a petición": el nombre no está en el texto.
+- **[V]** "Animar" (clic derecho en la imagen) adjunta bien la imagen (usado en las 5 escenas).
+- **[V]** El aviso de coste y "Aprobar" funcionan: "Flow ha registrado la aprobación" en las 5 escenas; 10 puntos.
+- **[V]** La descarga 1080p pedida por la extensión llegó como `blob:` a los 45 s (11,6 MB); una descarga manual del usuario llegó como `https:`.
+- **[V]** El navegador del usuario no tiene panel lateral para extensiones ("SidePanel API not available").
+- **[SUPUESTO]** Que el Agent renombre los VÍDEOS si se le pide (sí lo hace con las imágenes).
+
 ## Comportamiento de Chrome medido (Chromium 141, no depende de Flow)
 - **[V]** Con "Preguntar dónde guardar" **activado**, `chrome.downloads.download({saveAs:false})` **también** abre el diálogo: la
   descarga se queda `in_progress` con `filename` vacío. No hay forma por código de saltárselo con la API de descargas.

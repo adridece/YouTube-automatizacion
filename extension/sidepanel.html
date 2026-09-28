@@ -123,6 +123,10 @@
         </label>
         <label>Espera máx. por vídeo (min)<input id="maxWait" type="number" min="3" max="60" value="10" /></label>
       </div>
+      <div class="grid2" style="margin-top:10px">
+        <label>Intentos si Flow bloquea (imagen/vídeo)<input id="maxRetries" type="number" min="1" max="15" value="6" /></label>
+        <p class="hint" style="align-self:end;margin:0">Cada reintento suaviza un poco el prompt sin cambiar la escena. Solo se reintenta cuando Flow dice que falló (no cobra).</p>
+      </div>
       <label>Al pulsar el icono de la extensión, abrir
         <select id="uiMode">
           <option value="sidepanel">Panel lateral (se queda abierto junto a Flow)</option>

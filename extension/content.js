@@ -64,7 +64,7 @@ const CONFIG = {
   assetListWaitMs: 10000,
   rateLimitMaxRetries: 4,
   download: { createdTimeoutMs: 180000, completeTimeoutMs: 300000, attempts: 3 },
-  maxAttemptsPerScene: 2,
+  maxAttemptsPerScene: 6, // por defecto; se cambia en el panel (Opciones avanzadas)
 };
 
 const ACC = getFlowAccountKey(location.href);
@@ -146,7 +146,10 @@ new MutationObserver(() => {
   const n = Date.now();
   if (n - lastMutationWake > 250) { lastMutationWake = n; wakeAll(); }
 }).observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class", "aria-disabled", "disabled"] });
-setInterval(wakeAll, 1000);
+setInterval(() => { wakeAll(); if (running) document.dispatchEvent(new CustomEvent("fbr-tick")); }, 1000);
+
+// Modo "despierto" de page-hook.js (solo mientras hay un lote en marcha).
+function setBackgroundMode(on) { document.dispatchEvent(new CustomEvent(on ? "fbr-bg-on" : "fbr-bg-off")); }
 
 function waitFor(cond, timeoutMs, desc, opts) {
   const stoppable = !(opts && opts.stoppable === false);
@@ -294,6 +297,9 @@ function snapshotTiles() {
 function newVideoTiles(before) {
   return $$(CONFIG.videoTileTag).filter((t) => !before.videoNodes.has(t) && !before.videoKeys.includes(tileKey(t)));
 }
+function tileReady(t) { return !tileLooksInProgress(t.textContent); }
+function videoTilesByTitle(name) { return $$(CONFIG.videoTileTag).filter((t) => tileTitle(t) === name); }
+
 function imageTilesByLabel(label) {
   return $$(CONFIG.imageTileTag).filter((t) => tileTitle(t) === label);
 }
@@ -514,15 +520,18 @@ async function phaseImages(cfg, isResume) {
   let missing = todo.filter((n) => !present(n));
   for (const n of todo.filter(present)) await setStep(n, "image", "done");
 
-  for (let round = 1; round <= 2 && missing.length; round++) {
+  const maxRounds = Math.max(1, (cfg.maxRetries || 6) - 1);
+  for (let round = 1; round <= maxRounds && missing.length; round++) {
+    throwIfStopped();
     const labels = missing.map(pad3);
-    log("warn", `Faltan (o fueron bloqueadas) las imágenes ${labels.join(", ")}. Pido al Agent que las reformule y las repita (ronda ${round}/2).`);
+    log("warn", `Faltan (o fueron bloqueadas) las imágenes ${labels.join(", ")}. Pido al Agent que las reformule suavizándolas y las repita (ronda ${round}/${maxRounds}).`);
     const retryText =
       `Las imágenes con identificador ${labels.map((l) => `[${l}]`).join(", ")} no se generaron ` +
       `(fallaron o fueron bloqueadas por las políticas de contenido). Reformula cada uno de esos ` +
       `prompts para que sea más seguro y aceptable, manteniendo la idea general de la escena, y ` +
       `vuelve a generarlos (exactamente UNA imagen por prompt). Renombra cada imagen resultante con su mismo identificador ` +
-      `exacto (por ejemplo, la reformulación de [${labels[0]}] debe llamarse ${labels[0]}).`;
+      `exacto (por ejemplo, la reformulación de [${labels[0]}] debe llamarse ${labels[0]}).` +
+      (round >= 2 ? ` ${buildSoftenNote("image", round + 1)}` : "");
     const r = await sendWithRateLimit(() => writePrompt(retryText), { maxPoints: CONFIG.maxAllowedPointsImages });
     if (r.type === "started") {
       await tryWait(() => $$(CONFIG.pendingTileTag).length === 0, waitMs, "que terminen las imágenes reintentadas");
@@ -534,8 +543,8 @@ async function phaseImages(cfg, isResume) {
     missing = missing.filter((n) => !present(n));
   }
   for (const n of missing) {
-    await setStep(n, "image", "failed", { error: "la imagen no se generó ni reformulando (probable bloqueo de contenido): hazla a mano en Flow y llámala " + pad3(n) });
-    log("error", `La imagen ${pad3(n)} no se generó tras 2 reformulaciones. El resto del lote sigue.`, { scene: n });
+    await setStep(n, "image", "failed", { error: `la imagen no se generó ni tras ${maxRounds} reformulaciones (bloqueo de contenido): hazla a mano en Flow y llámala ${pad3(n)}` });
+    log("error", `La imagen ${pad3(n)} no se generó tras ${maxRounds} reformulaciones. El resto del lote sigue.`, { scene: n });
   }
   if (!missing.length) log("ok", "Fase 1 terminada: todas las imágenes generadas y renombradas.");
 }
@@ -577,10 +586,17 @@ async function attachViaPlusMenu(label) {
   if (hit.count > 1) log("warn", `Hay ${hit.count} imágenes llamadas "${label}"; uso la más reciente (la primera de la lista).`);
   hit.el.scrollIntoView({ block: "center" });
   clickDeep(hit.el);
-  const pane = await tryWait(() => { const p = $(CONFIG.detailPaneSelector); return p && p.textContent.includes(label) ? p : null; }, 6000, `la vista previa de "${label}"`);
-  if (!pane) {
-    const p = $(CONFIG.detailPaneSelector);
-    throw new Error(p ? `la vista previa no es de "${label}" (dice: "${p.textContent.trim().slice(0, 40)}")` : "no apareció la vista previa de la imagen");
+  // La vista previa puede llevar el nombre en el texto o solo en atributos
+  // (aria-label, alt, title): en el Flow real el texto es solo "Añadir a petición".
+  const paneText = (p) => [p.textContent, ...$$("[aria-label],[alt],[title]", p).map((e) => `${e.getAttribute("aria-label") || ""} ${e.getAttribute("alt") || ""} ${e.getAttribute("title") || ""}`)].join(" ");
+  const pane = await tryWait(() => $(CONFIG.detailPaneSelector), 6000, "la vista previa");
+  if (!pane) throw new Error("no apareció la vista previa de la imagen");
+  await sleep(400);
+  const txt = paneText($(CONFIG.detailPaneSelector) || pane);
+  if (!txt.includes(label)) {
+    const other = (txt.match(/\b\d{3}\b/g) || []).filter((x) => x !== label);
+    if (other.length) throw new Error(`la vista previa es de "${other[0]}", no de "${label}"`);
+    log("info", `La vista previa no muestra el nombre; confío en el elemento pulsado ("${(hit.el.textContent || "").trim()}").`);
   }
   const addToPrompt = await tryWait(() => $(CONFIG.addToPromptButtonSelector), 5000, 'el botón "Añadir a petición"');
   if (!addToPrompt) throw new Error('no encuentro el botón "Añadir a petición"');
@@ -615,21 +631,36 @@ async function attachReferenceImage(n) {
 }
 
 // ============================================================ FASE 2A: VÍDEOS
-async function waitForSceneVideo(sendRes, maxWaitMs) {
+// Espera al vídeo de la escena. Preferencia: el tile que el Agent ha
+// RENOMBRADO con el nombre pedido (robusto aunque Flow redibuje el tile o
+// tarde en terminar). Si en 30 s desde que hay un vídeo nuevo terminado no
+// aparece el nombre, se usa ese vídeo nuevo (método anterior).
+async function waitForSceneVideo(sendRes, maxWaitMs, wantedName) {
   const assigned = batch.order.map((m) => batch.scenes[m].videoKey).filter(Boolean);
+  let freshReadySince = 0;
+  let lastInProgressNote = 0;
   const r = await tryWait(() => {
     const sig = detectNewSignals(sendRes.textBefore, agentPanelText());
     if (sig.policy) return { error: "policy" };
+    if (wantedName) {
+      const named = videoTilesByTitle(wantedName).filter(tileReady);
+      if (named.length) return { key: tileKey(named[0]), el: named[0], named: true, count: named.length };
+    }
     const fresh = newVideoTiles(sendRes.before).filter((t) => !assigned.includes(tileKey(t)));
     const bad = fresh.find((t) => /no se ha podido generar/i.test(t.textContent || ""));
     if (bad) return { error: "genError" };
     if (sig.genError && !fresh.length) return { error: "genError" };
-    if (fresh.length && $$(CONFIG.pendingTileTag).length <= sendRes.before.pending) {
-      const pick = pickNewVideoKey(fresh.map(tileKey), assigned);
-      const el = fresh.find((t) => tileKey(t) === pick.key);
-      return { key: pick.key, el, ambiguous: pick.ambiguous, count: fresh.length };
+    const ready = fresh.filter(tileReady);
+    if (fresh.length && !ready.length && Date.now() - lastInProgressNote > 60000) {
+      lastInProgressNote = Date.now();
+      log("info", `El vídeo aún se está procesando en Flow (${(fresh[0].textContent || "").match(/\d{1,3}\s?%/) || "sin %"})…`);
     }
-    return null;
+    if (!ready.length) { freshReadySince = 0; return null; }
+    if (!freshReadySince) freshReadySince = Date.now();
+    if (wantedName && Date.now() - freshReadySince < 30000) return null; // damos tiempo al renombrado
+    const pick = pickNewVideoKey(ready.map(tileKey), assigned);
+    const el = ready.find((t) => tileKey(t) === pick.key);
+    return { key: pick.key, el, ambiguous: pick.ambiguous, count: ready.length, named: false };
   }, maxWaitMs, "el vídeo nuevo");
   return r || { error: "timeout" };
 }
@@ -657,16 +688,20 @@ async function phaseVideos(cfg) {
       log("error", "No hay prompt de animación para esta escena en el kit.");
       continue;
     }
-    const prompt = ensureVideoDuration(raw, CONFIG.videoSeconds);
-    if (prompt !== raw) log("info", `Ajusto la duración del prompt a ${CONFIG.videoSeconds} s (de ella depende el coste: 6 s = 10 puntos).`);
+    const tileName = buildVideoTileName(cfg.prefix, n, cfg.batchFolder);
+    // Se pide al Agent que renombre el vídeo (como ya hace con las imágenes) para
+    // encontrarlo después por su nombre. No cambia la duración (ni el coste).
+    const prompt = ensureVideoDuration(raw, CONFIG.videoSeconds) + `\n\n(Cuando termine de generarse, cambia el nombre de este vídeo exactamente a: ${tileName})`;
+    if (ensureVideoDuration(raw, CONFIG.videoSeconds) !== raw) log("info", `Ajusto la duración del prompt a ${CONFIG.videoSeconds} s (de ella depende el coste: 6 s = 10 puntos).`);
 
     let lastError = null;
     let outcome = null;
-    for (let attempt = 1; attempt <= CONFIG.maxAttemptsPerScene && !outcome; attempt++) {
-      ui.setStatus(`Escena ${pad3(n)}: vídeo (intento ${attempt}/${CONFIG.maxAttemptsPerScene})`, "info");
+    const maxAttempts = Math.max(1, cfg.maxRetries || CONFIG.maxAttemptsPerScene);
+    for (let attempt = 1; attempt <= maxAttempts && !outcome; attempt++) {
+      ui.setStatus(`Escena ${pad3(n)}: vídeo (intento ${attempt}/${maxAttempts})`, "info");
       await setStep(n, "video", "running", { videoApproved: false, error: null });
-      const text = attempt === 1 ? prompt
-        : `${prompt}\n\n(El intento anterior de esta animación falló o fue bloqueado por contenido. Reformula esta descripción de movimiento de forma más segura, manteniendo la misma idea general, y genera igualmente.)`;
+      const text = attempt === 1 ? prompt : `${prompt}\n\n${buildSoftenNote("video", attempt)}`;
+      if (attempt > 1) log("info", `Reintento ${attempt}/${maxAttempts}: pido al Agent el mismo vídeo con el prompt suavizado.`);
       let res;
       try {
         const t0 = Date.now();
@@ -692,26 +727,27 @@ async function phaseVideos(cfg) {
         }
         if (res.type === "started") {
           log("info", `Generando el vídeo… (espero hasta ${Math.round(maxWaitMs / 60000)} min; con cola puede tardar)`);
-          const v = await waitForSceneVideo(res, maxWaitMs);
+          const v = await waitForSceneVideo(res, maxWaitMs, tileName);
           if (v.key) {
-            if (v.ambiguous) log("warn", `Aparecieron ${v.count} vídeos nuevos a la vez; asigno el primero a esta escena. Revisa que sea el correcto.`);
+            if (!v.named && v.ambiguous) log("warn", `Aparecieron ${v.count} vídeos nuevos terminados a la vez y el Agent no renombró ninguno como "${tileName}"; asigno el primero. Revisa que sea el correcto.`);
+            else if (!v.named) log("warn", `El Agent no renombró el vídeo como "${tileName}"; lo identifico por ser el vídeo nuevo.`);
             videoElByScene.set(n, v.el);
-            await setStep(n, "video", "done", { videoKey: v.key, error: null });
-            log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s.`);
+            await setStep(n, "video", "done", { videoKey: v.key, videoName: v.named ? tileName : null, error: null });
+            log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s${v.named ? ` y renombrado "${tileName}"` : ""}.`);
             outcome = "done";
           } else if (v.error === "timeout") {
             lastError = `el coste se aprobó pero el vídeo no apareció en ${Math.round(maxWaitMs / 60000)} min`;
             outcome = "review";
           } else {
             lastError = v.error === "policy" ? "Flow lo bloqueó por su política de contenido" : "Flow dice que no se ha podido generar (no se cobra)";
-            log("warn", `${lastError}.${attempt < CONFIG.maxAttemptsPerScene ? " Reintento pidiendo que reformule." : ""}`);
+            log("warn", `${lastError}.${attempt < maxAttempts ? " Reintento suavizando el prompt." : ""}`);
           }
         } else if (res.type === "approvedNoStart") {
           lastError = res.error || "el coste se aprobó pero no empezó ninguna generación";
           outcome = "review";
         } else {
           lastError = res.error || ({ policy: "bloqueado por la política de contenido", genError: "Flow no pudo generarlo", cancelled: "el Agent canceló la generación", noStart: "no se llegó a enviar" }[res.type] || res.type);
-          log("warn", `No salió: ${lastError}.${attempt < CONFIG.maxAttemptsPerScene ? " Reintento." : ""}`);
+          log("warn", `No salió: ${lastError}.${attempt < maxAttempts ? " Reintento." : ""}`);
         }
       } catch (e) {
         if (e instanceof StopError || e instanceof NoPointsError || e instanceof CostError) throw e;
@@ -728,7 +764,7 @@ async function phaseVideos(cfg) {
     } else if (outcome !== "done") {
       await setStep(n, "video", "failed", { error: lastError || "no se pudo generar" });
       await setStep(n, "download", "skipped");
-      log("error", `No se pudo generar el vídeo tras ${CONFIG.maxAttemptsPerScene} intentos: ${lastError}. Sigo con la siguiente escena.`);
+      log("error", `No se pudo generar el vídeo tras ${maxAttempts} intentos: ${lastError}. Sigo con la siguiente escena.`);
     }
     await sleep(1500);
   }
@@ -737,6 +773,9 @@ async function phaseVideos(cfg) {
 
 // ======================================================= FASE 2B: DESCARGAS
 async function findVideoTileForScene(n) {
+  const name = batch.scenes[n].videoName || buildVideoTileName(batch.config.prefix, n, batch.config.batchFolder);
+  const byName = await findWithScroll(() => videoTilesByTitle(name).find(tileReady) || null, CONFIG.videoTileTag);
+  if (byName) return byName;
   const el = videoElByScene.get(n);
   if (el && el.isConnected) return el;
   const key = batch.scenes[n].videoKey;
@@ -904,7 +943,9 @@ function reasonOf(s) {
 
 async function finishRun(label) {
   const sum = summarizeBatch(batch);
-  const problems = [...sum.failed, ...sum.review, ...sum.nopoints];
+  const unfinished = batch.status !== "done" ? batch.order.filter((n) => !sum.done.includes(n) && ![...sum.failed, ...sum.review, ...sum.nopoints].includes(n)) : [];
+  for (const n of unfinished) if (!batch.scenes[n].error) batch.scenes[n].error = `sin terminar (${label})`;
+  const problems = [...sum.failed, ...sum.review, ...sum.nopoints, ...unfinished];
   const total = batch.order.length;
   const where = batch.config.destMode === "folder" ? `carpeta elegida/${batch.config.batchFolder}` : `Descargas/MundoFutFlow/${batch.config.batchFolder}`;
   ctxScene = null;
@@ -983,9 +1024,13 @@ async function runBatch(cfg, resumeState) {
   log("info", `${isResume ? "REANUDO" : "EMPIEZA"} el lote en ${ACC}: escenas ${batch.order.map(pad3).join(", ")} · modo ${cfg.genMode} · ${cfg.resolution} · nombres ${buildVideoFilename(cfg.nameFormat, cfg.prefix, batch.order[0] || 1)} · carpeta ${cfg.batchFolder} · pestaña ${document.visibilityState === "visible" ? "visible" : "OCULTA"}.`);
   if (document.visibilityState !== "visible") log("info", "La pestaña de Flow está en segundo plano: sigo trabajando igual (la extensión la mantiene despierta). Puedes seguir usando otras pestañas.");
   let label = "completo";
+  setBackgroundMode(true);
   try {
-    const box = await tryWait(() => getPromptBox(), 30000, "la caja de prompt de Flow");
-    if (!box) throw new Error("no encuentro la caja de prompt de Flow: ¿estás dentro de un proyecto?");
+    const box = await tryWait(() => getPromptBox(), 90000, "la caja de prompt de Flow");
+    if (!box) {
+      const shown = (document.body ? document.body.innerText : "").replace(/\s+/g, " ").trim().slice(0, 140);
+      throw new Error(`no encuentro la caja de prompt de Flow tras 90 s (pestaña ${document.visibilityState}; URL ${location.pathname}; la página muestra: "${shown || "nada"}")`);
+    }
     if (["paired", "imagesOnly"].includes(cfg.genMode)) await phaseImages(cfg, isResume);
     if (cfg.genMode === "downloadTest") await pickExistingVideos();
     let halt = null;
@@ -1019,6 +1064,7 @@ async function runBatch(cfg, resumeState) {
       console.error(e);
     }
   } finally {
+    setBackgroundMode(false);
     running = false;
     await closeOverlays().catch(() => {});
     for (const n of batch.order) for (const step of ["image", "video", "download"]) if (batch.scenes[n][step] === "running") batch.scenes[n][step] = step === "video" && batch.scenes[n].videoApproved ? "review" : "pending";
@@ -1059,7 +1105,7 @@ async function fetchBlobToOffscreen({ url, jobId, relPath, mime }) {
 // ============================================================== MENSAJES
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.target === "offscreen") return false;
-  if (msg.type === "TICK") { wakeAll(); return false; }
+  if (msg.type === "TICK") { wakeAll(); if (running) document.dispatchEvent(new CustomEvent("fbr-tick")); return false; }
   if (msg.type === "START_RUN") {
     if (running) { sendResponse({ ok: false, error: "ya hay un lote en marcha en esta pestaña" }); return false; }
     runBatch(msg, null);
@@ -1139,34 +1185,35 @@ const ui = (() => {
     root.innerHTML = `<style>
       :host{all:initial}
       *{box-sizing:border-box;font-family:"Google Sans",Roboto,system-ui,sans-serif}
-      .pill{display:flex;align-items:center;gap:8px;max-width:330px;padding:7px 12px 7px 9px;border-radius:999px;border:1px solid #3a3f4b;background:rgba(24,26,32,.94);color:#e8eaed;font-size:12px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.35);backdrop-filter:blur(6px);transition:transform .15s,border-color .15s}
-      .pill:hover{transform:translateY(-1px);border-color:#5b6272}
-      .pill:focus-visible,button:focus-visible{outline:2px solid #8ab4f8;outline-offset:2px}
-      .dot{width:9px;height:9px;border-radius:50%;background:#8ab4f8;flex:none}
+      .pill{display:flex;align-items:center;gap:8px;max-width:330px;padding:7px 12px 7px 9px;border-radius:999px;border:1px solid #34343a;background:rgba(20,20,22,.94);color:#f4f1f2;font-size:12px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.35);backdrop-filter:blur(6px);transition:transform .15s,border-color .15s}
+      .pill:hover{transform:translateY(-1px);border-color:#4a4a52}
+      .pill:focus-visible,button:focus-visible{outline:2px solid #ff4d6d;outline-offset:2px}
+      .dot{width:9px;height:9px;border-radius:50%;background:#ff4d6d;flex:none}
       .dot.run{animation:pulse 1.4s infinite}
-      .ok .dot{background:#81c995}.warn .dot{background:#fdd663}.error .dot{background:#f28b82}
-      .error.pill{border-color:#f28b82}
+      .ok .dot{background:#f5c2cd}.warn .dot{background:#ffbf5e}.error .dot{background:#ff8a5c}
+      .error.pill{border-color:#ff8a5c}
       @keyframes pulse{50%{opacity:.35}}
       @media (prefers-reduced-motion:reduce){.dot.run{animation:none}.pill{transition:none}}
       .txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      .card{width:340px;margin-bottom:8px;padding:12px;border-radius:14px;border:1px solid #3a3f4b;background:rgba(24,26,32,.97);color:#e8eaed;font-size:12px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+      .card{width:340px;margin-bottom:8px;padding:12px;border-radius:14px;border:1px solid #34343a;background:rgba(20,20,22,.97);color:#f4f1f2;font-size:12px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
       .row{display:flex;align-items:center;justify-content:space-between;gap:8px}
       h2{margin:0;font-size:13px;font-weight:600}
       .brand{display:flex;align-items:center;gap:6px}
-      .bar{height:6px;border-radius:99px;background:#2d313b;overflow:hidden;margin:10px 0}
-      .bar>i{display:block;height:100%;background:linear-gradient(90deg,#8ab4f8,#c58af9);transition:width .4s}
+      .bar{height:6px;border-radius:99px;background:#1b1b1e;overflow:hidden;margin:10px 0}
+      .bar>i{display:block;height:100%;background:linear-gradient(90deg,#ff4d6d,#a3142f);transition:width .4s}
       .scenes{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
-      .sc{display:flex;align-items:center;gap:3px;padding:3px 6px;border-radius:8px;background:#23262e;border:1px solid #30343e;font-variant-numeric:tabular-nums}
+      .sc{display:flex;align-items:center;gap:3px;padding:3px 6px;border-radius:8px;background:#1b1b1e;border:1px solid #26262a;font-variant-numeric:tabular-nums}
       .sc b{font-weight:600;margin-right:2px}
-      .s-pending{color:#6f7480}.s-running{color:#8ab4f8}.s-done{color:#81c995}.s-failed,.s-nopoints{color:#f28b82}.s-review{color:#fdd663}.s-skipped{color:#6f7480;opacity:.5}
-      .log{color-scheme:dark;max-height:150px;overflow:auto;font:11px/1.45 ui-monospace,Consolas,monospace;background:#15171c;border-radius:8px;padding:6px 8px;color:#bdc1c6}
-      .log .error{color:#f28b82}.log .warn{color:#fdd663}.log .ok{color:#81c995}
-      .btns{display:flex;gap:6px;margin-top:8px}
-      button{font:inherit;font-size:12px;color:#e8eaed;background:#2d313b;border:1px solid #3a3f4b;border-radius:8px;padding:5px 10px;cursor:pointer}
-      button:hover{background:#363b47}
-      button.danger{background:#5c2b29;border-color:#8c3a36}
-      .fatal{margin-bottom:8px;padding:8px;border-radius:8px;background:#5c2b29;color:#fce8e6}
-      .cd{display:flex;gap:6px;align-items:center;margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#2b2f3a;color:#e8eaed;font-size:12px;border:1px solid #8ab4f8}
+      .s-pending{color:#6f696c}.s-running{color:#ff4d6d}.s-done{color:#f5c2cd}.s-failed,.s-nopoints{color:#ff8a5c}.s-review{color:#ffbf5e}.s-skipped{color:#6f696c;opacity:.5}
+      .log{color-scheme:dark;max-height:150px;overflow:auto;font:11px/1.45 ui-monospace,Consolas,monospace;background:#09090a;border-radius:8px;padding:6px 8px;color:#cfc8cb}
+      .log .error{color:#ff8a5c}.log .warn{color:#ffbf5e}.log .ok{color:#f5c2cd}
+      .btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+      .btns button{white-space:nowrap;padding:5px 9px}
+      button{font:inherit;font-size:12px;color:#f4f1f2;background:#1b1b1e;border:1px solid #34343a;border-radius:8px;padding:5px 10px;cursor:pointer}
+      button:hover{background:#26262a}
+      button.danger{background:#4a0e1d;border-color:#a3142f}
+      .fatal{margin-bottom:8px;padding:8px;border-radius:8px;background:#4a0e1d;color:#ffd6de}
+      .cd{display:flex;gap:6px;align-items:center;margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#1b1b1e;color:#f4f1f2;font-size:12px;border:1px solid #ff4d6d}
     </style><div id="wrap"></div>`;
     (document.body || document.documentElement).appendChild(host);
     chrome.storage.local.get("fbrPagePanel").then((d) => {
@@ -1205,13 +1252,13 @@ const ui = (() => {
       const lines = localLog.slice(-40).map((e) => `<div class="${e.level}">${esc(formatLogEntry(e))}</div>`).join("");
       card = `<div class="card" role="region" aria-label="Cerezium Autopilot">
         ${st.fatal ? `<div class="fatal" role="alert">${esc(st.fatal)}</div>` : ""}
-        <div class="row"><h2 class="brand"><svg viewBox="0 0 128 128" width="18" height="18" aria-hidden="true"><path d="M67 27C62 44 52 58 45 72M67 27C71 45 78 57 86 67" fill="none" stroke="#8fd9a8" stroke-width="7" stroke-linecap="round"/><path d="M67 27C74 15 90 12 101 19C93 31 78 34 67 27Z" fill="#43c07f"/><circle cx="44" cy="86" r="21" fill="#f0284f"/><circle cx="87" cy="81" r="21" fill="#f0284f"/></svg>Cerezium · ${esc(ACC)}</h2><span>${pct}%</span></div>
+        <div class="row"><h2 class="brand"><svg viewBox="0 0 128 128" width="18" height="18" aria-hidden="true"><path d="M67 27C62 44 52 58 45 72M67 27C71 45 78 57 86 67" fill="none" stroke="#e79aab" stroke-width="7" stroke-linecap="round"/><path d="M67 27C74 15 90 12 101 19C93 31 78 34 67 27Z" fill="#a3142f"/><circle cx="44" cy="86" r="21" fill="#f0284f"/><circle cx="87" cy="81" r="21" fill="#f0284f"/></svg>Cerezium · ${esc(ACC)}</h2><span>${pct}%</span></div>
         <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
-        <div class="scenes">${scenes || '<span style="color:#9aa0a6">Sin lote en esta cuenta.</span>'}</div>
-        <div class="log" id="log" aria-live="polite">${lines || '<div style="color:#6f7480">El log aparecerá aquí.</div>'}</div>
+        <div class="scenes">${scenes || '<span style="color:#a9a2a5">Sin lote en esta cuenta.</span>'}</div>
+        <div class="log" id="log" aria-live="polite">${lines || '<div style="color:#6f696c">El log aparecerá aquí.</div>'}</div>
         <div class="btns">
           ${runningNow ? '<button class="danger" id="stop">Detener</button>' : ""}
-          <button id="panel">Panel de control</button><button id="copy">Copiar log</button><button id="move" title="Mover a otra esquina">Mover</button><button id="min">Plegar</button>
+          <button id="panel" title="Abrir el panel de control de Cerezium">Panel</button><button id="copy">Copiar log</button><button id="move" title="Mover a otra esquina">Mover</button><button id="min">Plegar</button>
         </div></div>`;
     }
     const cd = st.countdown ? `<div class="cd" role="alert"><span>${esc(st.countdown.text.replace("{s}", st.countdown.left))}</span><button id="cdGo">Ya</button><button id="cdNo">Cancelar</button></div>` : "";

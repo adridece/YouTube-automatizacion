@@ -1,21 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2a1220"/>
-      <stop offset="1" stop-color="#110a10"/>
+      <stop offset="0" stop-color="#1c1c1f"/>
+      <stop offset="1" stop-color="#09090a"/>
     </linearGradient>
     <linearGradient id="cz" x1="0" y1="0" x2="0.6" y2="1">
       <stop offset="0" stop-color="#ff4d6d"/>
-      <stop offset="1" stop-color="#d0103a"/>
+      <stop offset="1" stop-color="#b3102f"/>
+    </linearGradient>
+    <linearGradient id="hoja" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a3142f"/>
+      <stop offset="1" stop-color="#6e0c22"/>
     </linearGradient>
   </defs>
   <rect width="128" height="128" rx="30" fill="url(#bg)"/>
-  <rect x="1.5" y="1.5" width="125" height="125" rx="28.5" fill="none" stroke="#ffffff" stroke-opacity=".08" stroke-width="3"/>
+  <rect x="1.5" y="1.5" width="125" height="125" rx="28.5" fill="none" stroke="#ff4d6d" stroke-opacity=".18" stroke-width="3"/>
   <!-- rabitos -->
-  <path d="M67 27 C62 44 52 58 45 72" fill="none" stroke="#8fd9a8" stroke-width="6" stroke-linecap="round"/>
-  <path d="M67 27 C71 45 78 57 86 67" fill="none" stroke="#8fd9a8" stroke-width="6" stroke-linecap="round"/>
-  <!-- hoja -->
-  <path d="M67 27 C74 15 90 12 101 19 C93 31 78 34 67 27 Z" fill="#43c07f"/>
+  <path d="M67 27 C62 44 52 58 45 72" fill="none" stroke="#e79aab" stroke-width="6" stroke-linecap="round"/>
+  <path d="M67 27 C71 45 78 57 86 67" fill="none" stroke="#e79aab" stroke-width="6" stroke-linecap="round"/>
+  <!-- hoja (granate) -->
+  <path d="M67 27 C74 15 90 12 101 19 C93 31 78 34 67 27 Z" fill="url(#hoja)"/>
+  <path d="M71 26 C79 23 88 21 96 20" fill="none" stroke="#ff4d6d" stroke-opacity=".5" stroke-width="1.6" stroke-linecap="round"/>
   <!-- cerezas -->
   <circle cx="44" cy="86" r="21" fill="url(#cz)"/>
   <circle cx="87" cy="81" r="21" fill="url(#cz)"/>

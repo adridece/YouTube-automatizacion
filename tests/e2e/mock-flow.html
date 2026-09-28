@@ -105,7 +105,10 @@ function genImages(text) {
   setTimeout(() => {
     pend.forEach((p) => p.remove());
     list.forEach((n) => {
-      if (P.get("policyImage") === String(+n) && !retry && !blockedOnce.has(n)) { blockedOnce.add(n); say(`[${n}]: Esta generación fue bloqueada por nuestras políticas de seguridad.`); return; }
+      // policyImage=N bloquea la imagen N; policyImageTimes=K la bloquea K veces (por defecto 1).
+      const times = +(P.get("policyImageTimes") || 1);
+      window.__blocks = window.__blocks || {};
+      if (P.get("policyImage") === String(+n) && (window.__blocks[n] || 0) < times) { window.__blocks[n] = (window.__blocks[n] || 0) + 1; say(`[${n}]: Esta generación fue bloqueada por nuestras políticas de seguridad.`); return; }
       const t = addTile("flow-image-tile", "caricature " + uid());
       setTimeout(() => { t.querySelector(".footer-title").textContent = n; assets.unshift({ name: n, kind: "Imagen", tile: t }); }, T.rename);
     });
@@ -129,10 +132,29 @@ function askVideoCost(text, att) {
       bump("mockApproved");
       sessionStorage.setItem("mockPendingVideo", "1");
       const p = addTile("flow-pending-tile");
-      setTimeout(() => { sessionStorage.setItem("mockPendingVideo", "0"); p.remove(); const t = addTile("flow-video-tile", "Animate " + uid()); assets.unshift({ name: "Animate", kind: "Vídeo", tile: t }); }, T.video);
+      const wantName = (text.match(/cambia el nombre de este vídeo exactamente a: (\S+)\)/) || [])[1];
+      setTimeout(() => {
+        p.remove();
+        if (P.get("policyVideo") && videoSends <= +P.get("policyVideo")) { say("Esta generación de vídeo fue bloqueada por nuestras políticas de seguridad. No se te ha cobrado."); sessionStorage.setItem("mockPendingVideo", "0"); return; }
+        if (!P.get("hiddenStall")) { sessionStorage.setItem("mockPendingVideo", "0"); finalizeVideo(wantName); return; }
+        // SIM del problema real: se queda "100%" y solo termina con la página
+        // visible y fotogramas (rAF); al terminar se redibuja como tile NUEVO.
+        const stuck = addTile("flow-video-tile", "100%");
+        const iv = setInterval(() => {
+          if (document.hidden) return;
+          requestAnimationFrame(() => { if (!stuck.isConnected) return; clearInterval(iv); stuck.remove(); sessionStorage.setItem("mockPendingVideo", "0"); finalizeVideo(wantName); });
+        }, 500);
+      }, T.video);
     }));
     chat.appendChild(m);
   }, 1200); // SIM: la IA "piensa"
+}
+
+function finalizeVideo(wantName) {
+  const t = addTile("flow-video-tile", "Animate " + uid());
+  assets.unshift({ name: "Animate", kind: "Vídeo", tile: t });
+  // SIM: el Agent renombra el vídeo si se lo piden (salvo noRename=1).
+  if (wantName && !P.get("noRename")) setTimeout(() => { t.querySelector(".footer-title").textContent = wantName; }, 1500);
 }
 
 // ---- menú "+"
@@ -213,6 +235,13 @@ grid.addEventListener("contextmenu", (e) => {
     }));
   }));
 });
+// SIM (lazyPanel=1): Flow no pinta la caja de prompt hasta que la pestaña se
+// ve y hay fotogramas (lo que le pasó a la cuenta u3 del usuario).
+if (P.get("lazyPanel")) {
+  const form = document.getElementById("form"); const holder = form.parentNode; const next = form.nextSibling; form.remove();
+  const iv = setInterval(() => { if (document.hidden) return; requestAnimationFrame(() => { if (form.isConnected) return; holder.insertBefore(form, next); clearInterval(iv); }); }, 500);
+}
+
 </script>
 </body>
 </html>
