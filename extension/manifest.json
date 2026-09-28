@@ -13,7 +13,8 @@
     "offscreen",
     "alarms",
     "scripting",
-    "power"
+    "power",
+    "contentSettings"
   ],
   "host_permissions": [
     "https://flow.google.com/*",

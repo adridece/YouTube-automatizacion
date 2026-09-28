@@ -175,8 +175,10 @@ async function runScenario(name, sc, server) {
         // El usuario "está" en otra pestaña: la extensión nunca debe cambiarle la vista.
         const act = await panel.evaluate(() => chrome.tabs.query({ active: true }).then((t) => t.map((x) => x.url)));
         if (act.some((u) => u.includes("flow.google.com"))) flowWentActive = true;
-        if (discardableWhileRunning === null && b2 && b2.status === "running") {
-          discardableWhileRunning = await panel.evaluate(() => chrome.tabs.query({ url: "https://flow.google.com/*" }).then((t) => t.map((x) => x.autoDiscardable)));
+        // Solo cuentan las pestañas cuyo lote está EN MARCHA (en modo secuencial la 2.ª aún no ha empezado).
+        if (discardableWhileRunning === null && b2 && b2.status === "running" && b2.phase === "videos") {
+          const running = [["/u/2/", b2], ["/u/3/", b3]].filter(([, b]) => b && b.status === "running").map(([u]) => u);
+          discardableWhileRunning = await panel.evaluate((running) => chrome.tabs.query({ url: "https://flow.google.com/*" }).then((t) => t.filter((x) => running.some((u) => x.url.includes(u))).map((x) => x.autoDiscardable)), running);
         }
       }
       if (sc.reloadU2WhenApproved && !reloaded && b2 && b2.scenes[1].videoApproved && b2.scenes[1].video === "running") {

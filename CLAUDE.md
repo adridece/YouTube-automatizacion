@@ -1,4 +1,4 @@
-# CLAUDE.md — Flow Batch Runner (MUNDO FUT / The Odd Ledger)
+# CLAUDE.md — Cerezium Autopilot (antes "Flow Batch Runner") · MUNDO FUT / The Odd Ledger
 
 Lee este archivo entero antes de tocar nada. El detalle está en `docs/`.
 
@@ -42,11 +42,13 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (28 sep 2026 — v2.0.0)
+## Estado actual (28 sep 2026 — v2.1.0, "Cerezium Autopilot")
 Rehecha entera en la ronda del 28 sep (ver `docs/BUG_HISTORY.md` #22–34): log persistente, panel lateral, descargas de una en una
 con destino "Carpeta elegida" (sin diálogo aunque "Preguntar dónde guardar" esté activado — el usuario lo quiere activado),
 cuentas en paralelo, reanudación tras F5, límite de ritmo. **Todo probado con Chromium real + Flow SIMULADO (`npm run e2e`, 44/44)**,
-pero **aún no se ha completado NUNCA una ejecución real en Flow**. Lo primero con el usuario: la prueba de `README.md` →
+pero **aún no se ha completado NUNCA una ejecución real en Flow**. v2.1: el navegador del usuario **no tiene panel lateral**
+("SidePanel API not available") → ventanita de extensión; trabajo en segundo plano (nunca activar Flow; permiso de descargas
+automáticas vía `contentSettings`, sin él Chrome retiene la 2.ª descarga con Flow oculto — `npm run e2e:bg`). Lo primero con el usuario: la prueba de `README.md` →
 "Primera prueba de la v2", y pedirle el log copiado. Ver `docs/TODO.md`.
 
 ## Reglas de código (lecciones costosas — respétalas)
@@ -91,6 +93,8 @@ examples/sample-kit.txt   kit de ejemplo con el formato real (incluye ``` y enca
 
 ## Comandos
 - `npm run verify` → `node --check` de todo + ids del panel + tests (hazlo siempre antes de dar algo por terminado).
+- `npm run e2e:bg` → lo mismo con Flow en pestañas de fondo DE VERDAD. Playwright (run-e2e) hace que Chrome trate todas las
+  pestañas como visibles: para cualquier cosa de segundo plano usa run-bg.js.
 - `npm run e2e` → prueba de extremo a extremo contra Flow simulado (usa el Chromium de Playwright y xvfb-run). Si cambias
   `content.js`/`background.js`, pásala. Recuerda: el simulador solo imita lo verificado; no prueba Flow real.
 - `npm run zip` → genera `flow-batch-extension.zip` (solo la carpeta `extension/`).

@@ -810,7 +810,7 @@ async function downloadOne(n, tile, kind, cfg, mode) {
         throw err;
       }
       if (!createdAt && Date.now() - t0 > CONFIG.download.createdTimeoutMs) {
-        throw new Error(`Chrome no registró ninguna descarga en ${CONFIG.download.createdTimeoutMs / 1000} s. Causas posibles: (1) Flow no terminó de preparar el archivo; (2) el clic en la resolución no hizo efecto; (3) Chrome retiene la descarga con un aviso de "descargar varios archivos" (permítelo en chrome://settings/content/automaticDownloads)${visibilityNote()}`);
+        throw new Error(`Chrome no registró ninguna descarga en ${CONFIG.download.createdTimeoutMs / 1000} s. Causas posibles: (1) Flow no terminó de preparar el archivo; (2) el clic en la resolución no hizo efecto; (3) Chrome retiene la descarga con un aviso de "descargar varios archivos" (la extensión ya da ese permiso a flow.google.com; compruébalo en chrome://settings/content/automaticDownloads)${visibilityNote()}`);
       }
       if (createdAt && Date.now() - createdAt > CONFIG.download.completeTimeoutMs) throw new Error(`la descarga empezó pero no terminó en ${CONFIG.download.completeTimeoutMs / 1000} s`);
       if (Date.now() - lastNote > 30000) {

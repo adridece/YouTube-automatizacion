@@ -233,7 +233,6 @@ function checklistItems() {
     { id: "model", t: "Flow: vídeo con «Omni 1.1 Flash», 9:16 y x1", d: "Imagen y vídeo en 9:16 y cantidad x1. La extensión nunca toca el modelo." },
     { id: "project", t: "Un proyecto NUEVO y vacío en cada cuenta", d: "Si ya hay imágenes «001», «002»… se puede confundir de imagen." },
     { id: "windows", t: "Deja abiertas las pestañas de Flow (puedes usar otras)", d: "Flow trabaja en segundo plano: no hace falta mirarlo. La extensión impide que Chrome descarte esas pestañas y que el ordenador se duerma mientras trabaja. No las cierres ni recargues." },
-    { id: "autodl", t: "Si Chrome avisa de «descargar varios archivos», pulsa Permitir", d: 'En la prueba no hizo falta, pero si aparece ese aviso en Flow, Chrome retiene las descargas. <a href="#" data-open="chrome://settings/content/automaticDownloads">Abrir ajuste</a>' },
   ];
   if (dest === "downloads") items.push({ id: "askoff", t: "«Preguntar dónde guardar cada archivo» desactivado", d: 'Solo hace falta con este destino. <a href="#" data-open="chrome://settings/downloads">Abrir ajuste</a>' });
   else items.push({ id: "folderok", t: "Carpeta de destino elegida y con permiso", d: "Se comprueba sola al pulsar «Iniciar lote».", auto: folderState.has && folderState.perm === "granted" });

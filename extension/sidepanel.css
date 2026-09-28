@@ -36,7 +36,9 @@ h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .1px; }
 .icon-btn { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; border: 1px solid var(--line2); background: var(--card2); color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s; }
 .icon-btn:hover { color: var(--text); border-color: #475063; }
 /* Ventanita de extensión: Chrome la limita a 800×600 */
-html.modo-popup body { width: 420px; max-height: 600px; }
+html { overflow-x: hidden; }
+html.modo-popup body { width: 400px; max-height: 600px; }
+html.modo-popup .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
 html.modo-popup .log { max-height: 360px; }
 .chip { font-size: 11.5px; padding: 4px 10px; border-radius: 99px; background: var(--card2); border: 1px solid var(--line2); color: var(--muted); white-space: nowrap; }
 .chip.running { color: var(--accent); border-color: rgba(138,180,248,.5); }

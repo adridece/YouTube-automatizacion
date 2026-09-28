@@ -88,8 +88,17 @@ async function applyUiMode() {
     await chrome.action.setPopup({ popup: POPUP_PAGE });
     if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
   } else {
-    await chrome.action.setPopup({ popup: "" });
-    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+    try {
+      // En algunos navegadores basados en Chromium la API existe pero falla
+      // ("SidePanel API not available", visto en el del usuario): ventanita.
+      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+      await chrome.action.setPopup({ popup: "" });
+    } catch (e) {
+      blog("info", `Este navegador no tiene panel lateral para extensiones (${e.message}): al pulsar el icono se abrirá la ventanita.`);
+      await chrome.storage.local.set({ [UI_KEY]: "popup" });
+      await chrome.action.setPopup({ popup: POPUP_PAGE });
+      return "popup";
+    }
   }
   return mode;
 }
@@ -124,6 +133,27 @@ async function openFloatingWindow() {
   await chrome.storage.session.set({ [WIN_KEY]: w.id });
   return "window";
 }
+
+// COMPROBADO (tests/e2e/run-bg.js): con la pestaña de Flow en segundo plano,
+// Chrome deja pasar la 1.ª descarga y RETIENE la 2.ª y siguientes con un aviso
+// de "descargar varios archivos" que nadie ve. La extensión da ese permiso a
+// flow.google.com (lo mismo que chrome://settings/content/automaticDownloads).
+async function allowFlowAutomaticDownloads() {
+  if (!chrome.contentSettings || !chrome.contentSettings.automaticDownloads) {
+    blog("warn", 'Este navegador no deja a la extensión permitir las "descargas automáticas" de flow.google.com: permítelas tú en chrome://settings/content/automaticDownloads o la 2.ª descarga se quedará retenida.');
+    return false;
+  }
+  try {
+    for (const host of ["https://flow.google.com/*", "https://labs.google/*"]) {
+      await chrome.contentSettings.automaticDownloads.set({ primaryPattern: host, setting: "allow" });
+    }
+    return true;
+  } catch (e) {
+    blog("warn", `No pude permitir las descargas automáticas de flow.google.com (${e.message}). Permítelas en chrome://settings/content/automaticDownloads.`);
+    return false;
+  }
+}
+allowFlowAutomaticDownloads();
 
 chrome.runtime.onInstalled.addListener((d) => {
   applyUiMode().catch(() => {});
@@ -243,6 +273,7 @@ async function launchStep(step) {
 }
 
 async function runPlan(plan) {
+  await allowFlowAutomaticDownloads();
   blog("info", `Plan recibido: ${plan.steps.map((s) => `${s.accountKey} → escenas ${s.run.sceneNumbers.join(",")}`).join(" · ")} (${plan.parallel ? "en paralelo" : "una cuenta detrás de otra"}). Carpeta del lote: ${plan.steps[0] ? plan.steps[0].run.batchFolder : "?"}`);
   plan.pending = plan.steps.map((s) => s.accountKey);
   plan.results = {};
