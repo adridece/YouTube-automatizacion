@@ -161,6 +161,8 @@ async function runScenario(name, sc, server) {
     await sleep(500);
     await panel.screenshot({ path: path.join(OUT, `panel-lote-${name}.png`), fullPage: true });
     await panel.click("#start");
+    await sleep(400);
+    if (await panel.isVisible("#startMsg")) await panel.click("#start"); // "Iniciar de todas formas" (pestañas sin preparar)
 
     const t0 = Date.now();
     let batches = {};

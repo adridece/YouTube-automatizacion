@@ -14,8 +14,10 @@ MUNDO FUT (sirve igual para The Odd Ledger). **Contexto completo del proyecto: [
 4. Al actualizar a la 2.1, Chrome pide aceptar un permiso nuevo ("cambiar la configuración de los sitios"): es para permitir las
    descargas automáticas de flow.google.com, sin eso Chrome retiene el 2.º vídeo y siguientes cuando Flow está en segundo plano.
 
-**Segundo plano**: puedes seguir usando otras pestañas; la extensión nunca te cambia a Flow, impide que Chrome descarte esas
-pestañas y que el ordenador se duerma mientras trabaja. Solo no cierres ni recargues las pestañas de Flow.
+**Segundo plano (v2.3)**: antes de lanzar, **entra en cada pestaña de Flow y pulsa la cereza** (o **Alt+Shift+C**) una vez por
+sesión: la pestaña queda "preparada" (Chrome muestra en ella el icono de *compartiendo*: es la extensión manteniéndola activa; no se
+graba ni se envía nada). Después puedes usar otras pestañas: Chrome sigue procesando Flow como si lo miraras. La extensión nunca te
+cambia de pestaña, impide que Chrome descarte esas pestañas y que el ordenador se duerma. No cierres las pestañas de Flow.
 
 ## Antes de cada lote (lo repite el checklist del panel)
 - **Flow** → Ajustes ⚙ → "Configuración del agente": *Confirmar antes de generar* = **Siempre**; vídeo = **Omni 1.1 Flash**; 9:16 y x1.

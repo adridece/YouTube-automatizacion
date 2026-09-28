@@ -1021,8 +1021,8 @@ async function runBatch(cfg, resumeState) {
   await saveBatch();
   send({ type: "HEARTBEAT", acc: ACC, on: true });
   ctxPhase = "setup";
-  log("info", `${isResume ? "REANUDO" : "EMPIEZA"} el lote en ${ACC}: escenas ${batch.order.map(pad3).join(", ")} · modo ${cfg.genMode} · ${cfg.resolution} · nombres ${buildVideoFilename(cfg.nameFormat, cfg.prefix, batch.order[0] || 1)} · carpeta ${cfg.batchFolder} · pestaña ${document.visibilityState === "visible" ? "visible" : "OCULTA"}.`);
-  if (document.visibilityState !== "visible") log("info", "La pestaña de Flow está en segundo plano: sigo trabajando igual (la extensión la mantiene despierta). Puedes seguir usando otras pestañas.");
+  log("info", `${isResume ? "REANUDO" : "EMPIEZA"} el lote en ${ACC}: escenas ${batch.order.map(pad3).join(", ")} · modo ${cfg.genMode} · ${cfg.resolution} · nombres ${buildVideoFilename(cfg.nameFormat, cfg.prefix, batch.order[0] || 1)} · carpeta ${cfg.batchFolder} · pestaña ${document.visibilityState === "visible" ? "visible" : "OCULTA"}${cfg.armed ? " · preparada para segundo plano ✓" : " · SIN preparar para segundo plano"}.`);
+  if (!cfg.armed && document.visibilityState !== "visible") log("warn", "Esta pestaña está oculta y SIN preparar: Flow puede quedarse parado. Entra en ella y pulsa la cereza una vez (o Alt+Shift+C).");
   let label = "completo";
   setBackgroundMode(true);
   try {

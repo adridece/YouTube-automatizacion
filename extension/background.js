@@ -207,6 +207,8 @@ chrome.alarms.onAlarm.addListener(async (a) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const a = await getArmed();
+  if (a[tabId]) { await setArmed(tabId, null); offscreenCall({ type: "CAPTURE_STOP", tabId }).catch(() => {}); }
   const tabs = await getRunningTabs();
   if (!tabs[tabId]) return;
   const acc = tabs[tabId];
@@ -214,6 +216,51 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   blog("error", `Se ha cerrado la pestaña de Flow de la cuenta ${acc} con el lote en marcha. El progreso está guardado: vuelve a abrir Flow en esa cuenta (mismo proyecto) y se reanudará solo.`, { acc, phase: "run" });
   notify(`Pestaña cerrada (${acc})`, "Se cerró la pestaña de Flow con el lote en marcha. Vuelve a abrirla (mismo proyecto) y se reanudará.", true);
 });
+
+// ------------------------------------------ SEGUNDO PLANO DE VERDAD (captura)
+// COMPROBADO en Chromium (v2.3): una pestaña capturada con tabCapture pasa a
+// "visible" para Chrome y sigue pintándose y procesándose aunque el usuario
+// mire otra (sin captura, sus fotogramas se congelan y Flow se queda
+// "Cargando…" o con el vídeo "al 100%"). Chrome solo deja capturar una
+// pestaña en la que el usuario ha pulsado la extensión (icono o Alt+Shift+C):
+// por eso cada pestaña de Flow se "prepara" una vez al abrir la ventanita en ella.
+const ARM_KEY = "fbrArmedTabs"; // storage.session: { tabId: accountKey }
+
+async function getArmed() {
+  return (await chrome.storage.session.get(ARM_KEY))[ARM_KEY] || {};
+}
+async function setArmed(tabId, acc) {
+  const a = await getArmed();
+  if (acc) a[tabId] = acc;
+  else delete a[tabId];
+  await chrome.storage.session.set({ [ARM_KEY]: a });
+}
+async function isArmed(tabId) {
+  const a = await getArmed();
+  if (!a[tabId]) return false;
+  const r = await offscreenCall({ type: "CAPTURE_ALIVE", tabId }).catch(() => null);
+  if (r && r.alive) return true;
+  await setArmed(tabId, null);
+  return false;
+}
+async function armTab(tabId, quiet) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || "")) return { ok: false, error: "no es una pestaña de Flow" };
+  const acc = getFlowAccountKey(tab.url);
+  if (await isArmed(tabId)) return { ok: true, acc, already: true };
+  if (!chrome.tabCapture || !chrome.tabCapture.getMediaStreamId) return { ok: false, acc, error: "este navegador no permite a las extensiones capturar pestañas" };
+  let streamId;
+  try {
+    streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  } catch (e) {
+    return { ok: false, acc, needsClick: true, error: e.message };
+  }
+  const r = await offscreenCall({ type: "CAPTURE_START", tabId, streamId }).catch((e) => ({ ok: false, error: e.message }));
+  if (!r || !r.ok) return { ok: false, acc, error: (r && r.error) || "el documento de captura no respondió" };
+  await setArmed(tabId, acc);
+  if (!quiet) blog("ok", `Pestaña de ${acc} preparada para segundo plano: Chrome la seguirá procesando aunque mires otra pestaña. Verás en ella el icono de "compartiendo": es la extensión manteniéndola activa (no se graba ni se envía nada).`, { acc, phase: "setup" });
+  return { ok: true, acc };
+}
 
 // ----------------------------------------------------------- PESTAÑAS
 async function findTabForAccount(accountKey) {
@@ -270,8 +317,14 @@ async function launchStep(step) {
     }
     await new Promise((r) => setTimeout(r, 3000));
   }
+  let armed = await isArmed(tab.id);
+  if (!armed) armed = (await armTab(tab.id)).ok; // funciona si ya se pulsó la cereza en esa pestaña
+  if (!armed) {
+    blog("warn", `La pestaña de ${step.accountKey} NO está preparada para segundo plano. Si no la miras, Flow puede quedarse parado. Para prepararla: entra en esa pestaña y pulsa la cereza (o Alt+Shift+C) una vez; el lote sigue y en cuanto la prepares funcionará sin mirarla.`, { acc: step.accountKey });
+    notify(`Prepara la pestaña de ${step.accountKey}`, "Entra en esa pestaña de Flow y pulsa la cereza una vez para que siga trabajando aunque no la mires.", true);
+  }
   try {
-    const r = await sendToTab(tab.id, { type: "START_RUN", ...step.run });
+    const r = await sendToTab(tab.id, { type: "START_RUN", ...step.run, armed });
     if (r && r.ok === false) {
       blog("error", `La pestaña de ${step.accountKey} rechazó el lote: ${r.error}`, { acc: step.accountKey });
       return false;
@@ -360,7 +413,7 @@ async function ensureOffscreen() {
   if (await chrome.offscreen.hasDocument()) return;
   if (!offscreenCreating) {
     offscreenCreating = chrome.offscreen
-      .createDocument({ url: "offscreen.html", reasons: ["BLOBS"], justification: "Guardar los vídeos generados en la carpeta que eligió el usuario." })
+      .createDocument({ url: "offscreen.html", reasons: ["BLOBS", "USER_MEDIA"], justification: "Guardar los vídeos en la carpeta elegida y mantener activas (capturadas) las pestañas de Flow en segundo plano." })
       .catch((e) => { if (!/single offscreen/i.test(String(e && e.message))) throw e; })
       .finally(() => { offscreenCreating = null; });
   }
@@ -600,6 +653,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await saveJob();
         }
         return { ok: true };
+      case "ARM_TAB":
+        return await armTab(msg.tabId);
+      case "GET_ARMED": {
+        const a = await getArmed();
+        const out = {};
+        for (const id of Object.keys(a)) if (await isArmed(Number(id))) out[id] = a[id];
+        return { ok: true, armed: out };
+      }
+      case "CAPTURE_ENDED": {
+        const a = await getArmed();
+        const acc = a[msg.tabId];
+        await setArmed(msg.tabId, null);
+        if (acc) {
+          blog("warn", `La pestaña de ${acc} ha dejado de estar preparada para segundo plano (se cerró o se paró el "compartir"). Si hay un lote en marcha, vuelve a pulsar la cereza en esa pestaña.`, { acc });
+          const running = await getRunningTabs();
+          if (running[msg.tabId]) notify(`Pestaña de ${acc} sin preparar`, "Vuelve a pulsar la cereza en esa pestaña de Flow para que siga trabajando sin mirarla.", true);
+        }
+        return { ok: true };
+      }
       case "OPEN_PANEL":
         return { ok: true, how: await openFloatingWindow() };
       case "SET_UI_MODE":

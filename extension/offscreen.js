@@ -8,6 +8,36 @@
  */
 const chunkJobs = new Map(); // jobId -> { parts: Uint8Array[], relPath, mime }
 
+// SEGUNDO PLANO DE VERDAD (v2.3): mientras una pestaña está capturada, Chrome
+// la trata como VISIBLE y la sigue pintando/procesando aunque el usuario esté
+// en otra (comprobado en Chromium: rAF congelado → 60/s al capturar). Se pide
+// la imagen mínima (64 px, 1 fps) y no se guarda ni se envía a ningún sitio.
+const captures = new Map(); // tabId -> MediaStream
+
+async function startCapture(tabId, streamId) {
+  stopCapture(tabId);
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId, maxWidth: 64, maxHeight: 64, maxFrameRate: 1 } },
+  });
+  captures.set(tabId, stream);
+  const track = stream.getVideoTracks()[0];
+  track.onended = () => {
+    captures.delete(tabId);
+    chrome.runtime.sendMessage({ type: "CAPTURE_ENDED", tabId }).catch(() => {});
+  };
+  return { ok: true };
+}
+function stopCapture(tabId) {
+  const st = captures.get(tabId);
+  if (st) st.getTracks().forEach((t) => t.stop());
+  captures.delete(tabId);
+}
+function captureAlive(tabId) {
+  const st = captures.get(tabId);
+  return !!(st && st.getVideoTracks().some((t) => t.readyState === "live"));
+}
+
 function b64ToBytes(b64) {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -25,6 +55,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
       if (msg.type === "FS_STATUS") return sendResponse({ ok: true, ...(await fbrRootStatus()) });
+      if (msg.type === "CAPTURE_START") return sendResponse(await startCapture(msg.tabId, msg.streamId));
+      if (msg.type === "CAPTURE_STOP") { stopCapture(msg.tabId); return sendResponse({ ok: true }); }
+      if (msg.type === "CAPTURE_ALIVE") return sendResponse({ ok: true, alive: captureAlive(msg.tabId) });
       if (msg.type === "FS_SAVE_URL") {
         const r = await fetch(msg.url, { credentials: "include" });
         if (!r.ok) throw new Error(`la descarga devolvió HTTP ${r.status}`);
