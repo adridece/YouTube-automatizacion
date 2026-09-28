@@ -851,6 +851,11 @@ async function phaseDownloads(cfg) {
         if (e instanceof StopError) throw e;
         lastErr = e.message;
         await closeOverlays();
+        if (mode === "folder" && /permiso|carpeta de destino|no hay ninguna carpeta/i.test(e.message)) {
+          mode = "downloads";
+          log("error", `No puedo escribir en la carpeta elegida (${e.message}). Paso a guardar en Descargas/MundoFutFlow/${cfg.batchFolder}/ (si tienes "Preguntar dónde guardar" activado, Chrome preguntará).`);
+          send({ type: "NOTIFY", title: "Sin permiso en la carpeta elegida", message: "Guardo en Descargas/MundoFutFlow. Abre el panel de la extensión y pulsa «Conceder acceso» para la próxima vez.", sticky: true });
+        }
         log("warn", `Descarga fallida (intento ${attempt}/${CONFIG.download.attempts}): ${e.message}`);
         if (attempt < CONFIG.download.attempts) await sleep(3000);
       }
@@ -907,6 +912,12 @@ function markRemaining(e) {
 async function runBatch(cfg, resumeState) {
   if (running) return { ok: false, error: "ya hay un lote en marcha en esta pestaña" };
   running = true;
+  const claim = await send({ type: "CLAIM", acc: ACC });
+  if (claim && claim.ok === false) {
+    running = false;
+    log("error", `No empiezo: ${claim.error}. Cierra la pestaña duplicada.`, { phase: "setup", scene: null });
+    return { ok: false, error: claim.error };
+  }
   stopRequested = false;
   const isResume = !!resumeState;
   batch = resumeState ? prepareResume(resumeState) : createBatchState({ batchId: cfg.batchId || String(Date.now()), accountKey: ACC, sceneNumbers: cfg.sceneNumbers, config: cfg });
@@ -1148,6 +1159,7 @@ const ui = (() => {
         </div></div>`;
     }
     const cd = st.countdown ? `<div class="cd" role="alert"><span>${esc(st.countdown.text.replace("{s}", st.countdown.left))}</span><button id="cdGo">Ya</button><button id="cdNo">Cancelar</button></div>` : "";
+    const focusedId = root.activeElement && root.activeElement.id;
     wrap.innerHTML = `${cd}${card}<button class="pill ${lvl}" id="pill" aria-expanded="${st.expanded}" aria-label="Flow Batch Runner: ${esc(st.fatal || st.status)}"><span class="dot ${runningNow ? "run" : ""}"></span><span class="txt">${esc(st.fatal || st.status)}${p && runningNow ? ` · ${pct}%` : ""}</span></button>`;
     const on = (id, fn) => { const el = root.getElementById(id); if (el) el.addEventListener("click", fn); };
     on("pill", () => { st.expanded = !st.expanded; render(); });
@@ -1170,6 +1182,7 @@ const ui = (() => {
     on("cdNo", () => st.countdown && st.countdown.resolve(false));
     const lg = root.getElementById("log");
     if (lg) lg.scrollTop = lg.scrollHeight;
+    if (focusedId && root.getElementById(focusedId)) root.getElementById(focusedId).focus();
   }
   let renderQueued = false;
   function queueRender() {

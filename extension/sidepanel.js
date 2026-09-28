@@ -103,11 +103,13 @@ let saveT = null;
 document.addEventListener("input", () => { clearTimeout(saveT); saveT = setTimeout(saveForm, 400); refreshDerived(); });
 document.addEventListener("change", () => { saveForm(); refreshDerived(); });
 
+// "2", "u2", "/u/2/" -> "u2"
+function accKey(v) { return `u${String(v || "").replace(/\D/g, "")}`; }
 function accounts(f) {
   const out = [];
   for (const k of ["A", "B"]) {
     if (!f[`acc${k}_on`]) continue;
-    out.push({ label: k, accountKey: `u${String(f[`acc${k}_num`]).trim()}`, range: f[`acc${k}_range`], sceneNumbers: parseRange(f[`acc${k}_range`]), resolution: f[`acc${k}_res`] });
+    out.push({ label: k, accountKey: accKey(f[`acc${k}_num`]), range: f[`acc${k}_range`], sceneNumbers: parseRange(f[`acc${k}_range`]), resolution: f[`acc${k}_res`] });
   }
   return out;
 }
@@ -142,7 +144,7 @@ function refreshDerived() {
   for (const k of ["A", "B"]) {
     const on = f[`acc${k}_on`];
     document.querySelector(`.acc[data-acc="${k}"]`).classList.toggle("off", !on);
-    const key = `u${String(f[`acc${k}_num`]).trim()}`;
+    const key = accKey(f[`acc${k}_num`]);
     const tab = flowTabs.find((t) => getFlowAccountKey(t.url) === key);
     const el = $(`acc${k}_state`);
     if (!on) { el.textContent = ""; el.className = "tabstate"; continue; }

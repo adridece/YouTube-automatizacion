@@ -254,13 +254,16 @@ function finishJob(result) {
   saveJob();
 }
 
+let offscreenCreating = null;
 async function ensureOffscreen() {
   if (await chrome.offscreen.hasDocument()) return;
-  await chrome.offscreen.createDocument({
-    url: "offscreen.html",
-    reasons: ["BLOBS"],
-    justification: "Guardar los vídeos generados en la carpeta que eligió el usuario.",
-  });
+  if (!offscreenCreating) {
+    offscreenCreating = chrome.offscreen
+      .createDocument({ url: "offscreen.html", reasons: ["BLOBS"], justification: "Guardar los vídeos generados en la carpeta que eligió el usuario." })
+      .catch((e) => { if (!/single offscreen/i.test(String(e && e.message))) throw e; })
+      .finally(() => { offscreenCreating = null; });
+  }
+  await offscreenCreating;
 }
 
 async function offscreenCall(msg) {
@@ -416,6 +419,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case "NOTIFY":
         notify(msg.title, msg.message, msg.sticky);
         return { ok: true };
+      case "CLAIM": {
+        // Evita que la MISMA cuenta corra en dos pestañas a la vez (p. ej. dos
+        // pestañas /u/2/ que reanudan el mismo lote): generaría dos veces.
+        const tabs = await getRunningTabs();
+        for (const [id, acc] of Object.entries(tabs)) {
+          if (acc !== msg.acc || Number(id) === tabId) continue;
+          const alive = await chrome.tabs.get(Number(id)).then(() => true, () => false);
+          if (alive) return { ok: false, error: `la cuenta ${acc} ya tiene un lote en marcha en otra pestaña` };
+        }
+        if (tabId != null) await setRunningTab(tabId, msg.acc, true);
+        return { ok: true };
+      }
       case "HEARTBEAT":
         if (tabId != null) await setRunningTab(tabId, msg.acc, !!msg.on);
         return { ok: true };
