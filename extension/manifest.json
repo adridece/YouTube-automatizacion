@@ -1,34 +1,70 @@
 {
   "manifest_version": 3,
-  "name": "MUNDO FUT / Flow Batch Runner",
-  "version": "2.0.1",
-  "description": "Automatiza Google Flow: genera las imágenes de un Short, anima cada escena y guarda los vídeos numerados en una carpeta nueva por lote.",
+  "name": "Cerezium Autopilot — Google Flow",
+  "version": "2.1.0",
+  "description": "Cerezium Autopilot: tus Shorts en piloto automático en Google Flow. Genera las imágenes, anima cada escena y guarda los vídeos numerados en una carpeta nueva por lote.",
   "minimum_chrome_version": "116",
-  "permissions": ["storage", "downloads", "tabs", "notifications", "sidePanel", "offscreen", "alarms", "scripting"],
+  "permissions": [
+    "storage",
+    "downloads",
+    "tabs",
+    "notifications",
+    "sidePanel",
+    "offscreen",
+    "alarms",
+    "scripting",
+    "power",
+    "contentSettings"
+  ],
   "host_permissions": [
     "https://flow.google.com/*",
     "https://labs.google/*",
     "https://*.googleusercontent.com/*",
     "https://storage.googleapis.com/*"
   ],
-  "icons": { "16": "icon.png", "48": "icon.png", "128": "icon.png" },
-  "action": {
-    "default_title": "Flow Batch Runner (abre el panel lateral)",
-    "default_icon": "icon.png"
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
   },
-  "side_panel": { "default_path": "sidepanel.html" },
+  "action": {
+    "default_title": "Cerezium Autopilot",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "content_scripts": [
     {
-      "matches": ["https://flow.google.com/*", "https://labs.google/fx/tools/flow/*"],
-      "js": ["page-hook.js"],
+      "matches": [
+        "https://flow.google.com/*",
+        "https://labs.google/fx/tools/flow/*"
+      ],
+      "js": [
+        "page-hook.js"
+      ],
       "world": "MAIN",
       "run_at": "document_start"
     },
     {
-      "matches": ["https://flow.google.com/*", "https://labs.google/fx/tools/flow/*"],
-      "js": ["shared.js", "content.js"],
+      "matches": [
+        "https://flow.google.com/*",
+        "https://labs.google/fx/tools/flow/*"
+      ],
+      "js": [
+        "shared.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
-  "background": { "service_worker": "background.js" }
+  "background": {
+    "service_worker": "background.js"
+  },
+  "short_name": "Cerezium"
 }

@@ -1,4 +1,6 @@
-# Flow Batch Runner
+# Cerezium Autopilot 🍒
+
+*(antes "Flow Batch Runner")* — Shorts en piloto automático para Google Flow.
 
 Extensión de Chrome para producir Shorts en lote con **Google Flow**: pegas el kit (prompts de imagen + de animación),
 y genera las imágenes, anima cada una con su imagen de referencia y descarga los vídeos numerados. Pensada para el canal
@@ -7,11 +9,17 @@ MUNDO FUT (sirve igual para The Odd Ledger). **Contexto completo del proyecto: [
 ## Instalar en Chrome
 1. `chrome://extensions` → activa **Modo de desarrollador** → **Cargar descomprimida** → elige la carpeta **`extension/`**.
 2. Tras cualquier cambio de código: botón ⟳ de la extensión **y F5 en las pestañas de Flow**.
-3. Pulsa el icono de la extensión: se abre el **panel lateral** (no se cierra al cambiar de pestaña).
+3. Pulsa el icono de la extensión (la cereza): se abre el **panel lateral** o, si tu navegador no lo tiene, la **ventanita** de
+   extensión. Se elige en Opciones avanzadas; el botón ↗ la abre en una ventana flotante pequeña para verla junto a Flow.
+4. Al actualizar a la 2.1, Chrome pide aceptar un permiso nuevo ("cambiar la configuración de los sitios"): es para permitir las
+   descargas automáticas de flow.google.com, sin eso Chrome retiene el 2.º vídeo y siguientes cuando Flow está en segundo plano.
+
+**Segundo plano**: puedes seguir usando otras pestañas; la extensión nunca te cambia a Flow, impide que Chrome descarte esas
+pestañas y que el ordenador se duerma mientras trabaja. Solo no cierres ni recargues las pestañas de Flow.
 
 ## Antes de cada lote (lo repite el checklist del panel)
 - **Flow** → Ajustes ⚙ → "Configuración del agente": *Confirmar antes de generar* = **Siempre**; vídeo = **Omni 1.1 Flash**; 9:16 y x1.
-- Un **proyecto nuevo** en cada cuenta, y cada cuenta (`/u/2/`, `/u/3/`) en **su propia ventana, visible** (no minimizada).
+- Un **proyecto nuevo** en cada cuenta (`/u/2/`, `/u/3/`), con su pestaña abierta (puede estar en segundo plano).
 - **Destino "Carpeta elegida"** (recomendado): en el panel → Salida → **Elegir** → el Escritorio (o una carpeta dentro). Funciona
   **aunque tengas activado** "Preguntar dónde guardar cada archivo". Tras reiniciar Chrome, al pulsar "Iniciar lote" Chrome
   puede preguntar una vez si permites el acceso a esa carpeta.
@@ -42,6 +50,7 @@ Cada vídeo debe costar **10 puntos**; si Flow pide más, la extensión pulsa "R
 ```bash
 npm run verify     # sintaxis de todo + ids del panel + tests (lógica pura)
 npm run e2e        # Chromium real + extensión + Flow SIMULADO (tests/e2e/), capturas en tests/e2e/.out/
+npm run e2e:bg     # lo mismo con Flow en pestañas de FONDO de verdad (sin Playwright enganchado)
 npm run zip        # genera flow-batch-extension.zip con solo extension/
 ```
 Sin dependencias ni paso de build (el e2e usa el Playwright/Chromium preinstalado del entorno de Claude Code).

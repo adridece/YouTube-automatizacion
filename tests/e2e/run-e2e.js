@@ -121,13 +121,24 @@ async function runScenario(name, sc, server) {
     // Chrome deriva el id de una extensión descomprimida del SHA-256 de su ruta.
     const extId = [...require("crypto").createHash("sha256").update(EXT).digest("hex").slice(0, 32)].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join("");
 
-    const u2 = await ctx.newPage();
-    await u2.goto(`https://flow.google.com/u/2/project/aaa?${sc.u2}`);
-    const u3 = await ctx.newPage();
-    await u3.goto(`https://flow.google.com/u/3/project/bbb?${sc.u3}`);
+    // El usuario está en OTRA pestaña (la del panel); las de Flow se abren como
+    // pestañas de fondo de la MISMA ventana (Playwright, con newPage, abriría
+    // ventanas nuevas y visibles: eso no probaría el segundo plano).
     const panel = await ctx.newPage();
     await panel.setViewportSize({ width: 400, height: 1000 });
     await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
+    const openBg = async (url) => {
+      const wait = ctx.waitForEvent("page", (p) => p.url().startsWith(url.split("?")[0]) || p.url() === "about:blank");
+      await panel.evaluate((u) => chrome.tabs.create({ url: u, active: false }), url);
+      const pg = await wait;
+      await pg.waitForLoadState("domcontentloaded");
+      return pg;
+    };
+    const u2 = await openBg(`https://flow.google.com/u/2/project/aaa?${sc.u2}`);
+    const u3 = await openBg(`https://flow.google.com/u/3/project/bbb?${sc.u3}`);
+    await sleep(1500);
+    const vis = [await u2.evaluate(() => document.visibilityState), await u3.evaluate(() => document.visibilityState)];
+    console.log("  visibilidad de las pestañas de Flow al empezar:", vis.join(", "));
     if (sc.dest === "folder") {
       // No se puede automatizar el selector de carpetas del sistema: se usa una
       // carpeta del almacenamiento privado del navegador (OPFS), misma API.
@@ -155,9 +166,21 @@ async function runScenario(name, sc, server) {
     let batches = {};
     let shotMid = false;
     let reloaded = false;
+    let flowWentActive = false;
+    let discardableWhileRunning = null;
     while (Date.now() - t0 < 6 * 60000) {
       batches = await panel.evaluate(() => chrome.storage.local.get(["batch_u2", "batch_u3"]));
       const b2 = batches.batch_u2, b3 = batches.batch_u3;
+      if (!shotMid) {
+        // El usuario "está" en otra pestaña: la extensión nunca debe cambiarle la vista.
+        const act = await panel.evaluate(() => chrome.tabs.query({ active: true }).then((t) => t.map((x) => x.url)));
+        if (act.some((u) => u.includes("flow.google.com"))) flowWentActive = true;
+        // Solo cuentan las pestañas cuyo lote está EN MARCHA (en modo secuencial la 2.ª aún no ha empezado).
+        if (discardableWhileRunning === null && b2 && b2.status === "running" && b2.phase === "videos") {
+          const running = [["/u/2/", b2], ["/u/3/", b3]].filter(([, b]) => b && b.status === "running").map(([u]) => u);
+          discardableWhileRunning = await panel.evaluate((running) => chrome.tabs.query({ url: "https://flow.google.com/*" }).then((t) => t.filter((x) => running.some((u) => x.url.includes(u))).map((x) => x.autoDiscardable)), running);
+        }
+      }
       if (sc.reloadU2WhenApproved && !reloaded && b2 && b2.scenes[1].videoApproved && b2.scenes[1].video === "running") {
         reloaded = true;
         console.log("  … F5 en la pestaña de u2 con el vídeo 001 aprobado y generándose");
@@ -229,6 +252,10 @@ async function runScenario(name, sc, server) {
     check(`archivos en ${sc.dest === "folder" ? "la carpeta elegida" : "Descargas/MundoFutFlow/<lote>"}: ${E.files.join(", ")}`, JSON.stringify(names) === JSON.stringify([...E.files].sort()) && names.every((f) => files[f] === 350000), JSON.stringify(files));
     check('ningún diálogo "Guardar como" pendiente', stuck.length === 0, `${downloads.length} descargas vistas, ${stuck.length} atascadas`);
     if (name === "folder" || name === "resume") check("sin ERRORes falsos en el log", !/ERROR: Chrome interrumpió/.test(logTxt));
+    check("nunca se cambió la vista a una pestaña de Flow", !flowWentActive);
+    // (El segundo plano REAL se prueba en run-bg.js: Playwright hace que Chrome trate todas las pestañas como visibles.)
+    if (discardableWhileRunning) check("Chrome no puede descartar las pestañas de Flow mientras trabajan", discardableWhileRunning.every((d) => d === false), JSON.stringify(discardableWhileRunning));
+
     if (E.sequential) {
       const endU2 = fbrLog.find((e) => e.acc === "u2" && /RESUMEN/.test(e.msg));
       const startU3 = fbrLog.find((e) => e.acc === "u3" && /EMPIEZA/.test(e.msg));

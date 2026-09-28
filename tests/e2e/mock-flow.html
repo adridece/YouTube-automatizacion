@@ -143,7 +143,11 @@ document.getElementById("plus").addEventListener("click", () => {
   const vp = document.createElement("cdk-virtual-scroll-viewport");
   const pane = document.createElement("flow-add-menu-detail-pane");
   pop.append(vp, pane); overlay.appendChild(pop);
-  setTimeout(() => { // SIM: la lista tarda en pintarse
+  // SIM: la lista tarda en pintarse. Con rafList=1 se pinta en un
+  // requestAnimationFrame, que Chrome NO ejecuta en pestañas ocultas (el caso
+  // más desfavorable de lo que podría hacer la lista virtual de Flow).
+  const paint = P.get("rafList") ? (fn) => setTimeout(() => requestAnimationFrame(fn), 600) : (fn) => setTimeout(fn, 600);
+  paint(() => {
     for (const a of assets) {
       const it = document.createElement("flow-add-menu-asset-item");
       it.textContent = a.name + a.kind;
@@ -156,7 +160,7 @@ document.getElementById("plus").addEventListener("click", () => {
       });
       vp.appendChild(it);
     }
-  }, 600);
+  });
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeOverlay(); });
 // seed=img:1-2,vid:2 → el proyecto ya tiene imágenes 001-002 y 2 vídeos (solo la 1.ª vez).
