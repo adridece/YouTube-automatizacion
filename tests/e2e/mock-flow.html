@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Flow (SIMULADO para pruebas)</title>
+<!--
+  Imitación MÍNIMA de Google Flow construida SOLO con lo que docs/FLOW_DOM_FINDINGS.md
+  da por verificado ([V]). Sirve para probar la lógica de la extensión de principio a
+  fin sin gastar puntos. NO demuestra que Flow real se comporte igual: lo que aquí
+  se inventa (tiempos, textos de error, cómo entrega la descarga) está marcado SIM.
+  Parámetros (query string): policyImage=N (la imagen N se bloquea la 1ª vez),
+  rateLimitVideo=K (el K-ésimo envío de vídeo responde "demasiado rápido"),
+  cost=15 (coste pedido), videoMs, imageMs, prepMs (preparación de la descarga).
+-->
+<style>
+  body { margin: 0; font: 13px system-ui, sans-serif; background: #111; color: #ddd; display: flex; height: 100vh; }
+  #grid { flex: 1; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 10px; padding: 12px; overflow: auto; }
+  flow-image-tile, flow-video-tile, flow-pending-tile { display: block; width: 120px; height: 190px; border-radius: 8px; background: #222; position: relative; overflow: hidden; }
+  flow-image-tile { background: linear-gradient(160deg,#3a6,#236); }
+  flow-video-tile { background: linear-gradient(160deg,#63a,#326); }
+  flow-pending-tile { background: repeating-linear-gradient(45deg,#333 0 10px,#2a2a2a 10px 20px); }
+  .footer-title { position: absolute; bottom: 0; left: 0; right: 0; padding: 4px 6px; background: rgba(0,0,0,.5); font-size: 11px; }
+  flow-agent-panel { width: 360px; display: flex; flex-direction: column; border-left: 1px solid #333; background: #181818; }
+  #chat { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { padding: 8px; border-radius: 8px; background: #222; }
+  .msg.user { background: #243; align-self: flex-end; max-width: 90%; white-space: pre-wrap; max-height: 80px; overflow: hidden; }
+  .option-row { padding: 4px 8px; margin-top: 4px; border: 1px solid #555; border-radius: 6px; cursor: pointer; }
+  .option-row.read-only { opacity: .5; pointer-events: none; }
+  form { padding: 10px; border-top: 1px solid #333; }
+  .prompt-top-row { display: flex; gap: 6px; margin-bottom: 6px; }
+  .attached { width: 34px; height: 50px; background: #3a6; border-radius: 4px; font-size: 9px; }
+  [contenteditable] { min-height: 60px; padding: 6px; background: #0d0d0d; border: 1px solid #444; border-radius: 6px; outline: none; }
+  .cdk-overlay-container { position: fixed; inset: 0; pointer-events: none; z-index: 1000; }
+  .cdk-overlay-container > * { pointer-events: auto; }
+  flow-add-menu-popover-content { position: absolute; right: 370px; bottom: 60px; width: 420px; height: 300px; display: flex; background: #1e1e1e; border: 1px solid #444; border-radius: 10px; }
+  cdk-virtual-scroll-viewport { display: block; width: 200px; height: 100%; overflow: auto; }
+  flow-add-menu-asset-item { display: block; padding: 8px; border-bottom: 1px solid #333; cursor: pointer; }
+  flow-add-menu-detail-pane { flex: 1; padding: 10px; }
+  .ctx { position: absolute; background: #1e1e1e; border: 1px solid #444; border-radius: 8px; min-width: 160px; }
+  flow-menu-item { display: block; padding: 6px 10px; cursor: pointer; }
+  flow-menu-item:hover { background: #333; }
+</style>
+</head>
+<body>
+<div id="grid"></div>
+<flow-agent-panel>
+  <div id="chat"><div class="msg">Hola, soy el Agent de Flow (simulado).</div></div>
+  <form id="form">
+    <div class="prompt-top-row" id="attachRow"></div>
+    <flow-rich-text-editor><div><div contenteditable="true" id="editor"></div></div></flow-rich-text-editor>
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <flow-add-menu><button type="button" id="plus">+</button></flow-add-menu>
+      <flow-generate-icon-button><button type="submit" aria-label="Iniciar generación">➤</button></flow-generate-icon-button>
+    </div>
+  </form>
+</flow-agent-panel>
+<div class="cdk-overlay-container" id="overlay"></div>
+<script>
+const P = new URLSearchParams(location.search);
+const T = { image: +(P.get("imageMs") || 1500), video: +(P.get("videoMs") || 3000), prep: +(P.get("prepMs") || 2500), rename: 1200 };
+const grid = document.getElementById("grid"), chat = document.getElementById("chat"), overlay = document.getElementById("overlay");
+const editor = document.getElementById("editor"), attachRow = document.getElementById("attachRow");
+const assets = []; // más recientes primero: { name, kind, tile }
+let videoSends = 0;
+const blockedOnce = new Set();
+const uid = () => Math.random().toString(36).slice(2, 10);
+const say = (html) => { const d = document.createElement("div"); d.className = "msg"; d.innerHTML = html; chat.appendChild(d); chat.scrollTop = 1e9; return d; };
+
+// SIM: como Flow real, el proyecto conserva sus tiles tras recargar (F5).
+const saved = JSON.parse(sessionStorage.getItem("mockTiles") || "[]");
+function persist() {
+  const list = [...grid.children].reverse().filter((t) => t.tagName !== "FLOW-PENDING-TILE").map((t) => ({ tag: t.tagName.toLowerCase(), name: t.querySelector(".footer-title").textContent, src: (t.querySelector("video,img") || {}).getAttribute("src") }));
+  sessionStorage.setItem("mockTiles", JSON.stringify(list));
+}
+new MutationObserver(persist).observe(grid, { childList: true, subtree: true, characterData: true });
+function addTile(tag, name, src) {
+  const t = document.createElement(tag);
+  if (tag !== "flow-pending-tile") {
+    if (tag === "flow-video-tile") { const v = document.createElement("video"); v.setAttribute("src", src || `/media/${uid()}.mp4`); t.appendChild(v); }
+    else { const i = document.createElement("img"); i.setAttribute("src", src || `/media/${uid()}.png`); t.appendChild(i); }
+    const f = document.createElement("div"); f.className = "footer-title"; f.textContent = name; t.appendChild(f);
+  }
+  grid.prepend(t); // SIM: los más recientes primero (el orden del DOM no es numérico)
+  return t;
+}
+const bump = (k) => sessionStorage.setItem(k, String(+(sessionStorage.getItem(k) || 0) + 1));
+
+document.getElementById("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = editor.textContent.trim();
+  const att = [...attachRow.children].map((a) => a.dataset.label);
+  if (!text) return;
+  const u = document.createElement("div"); u.className = "msg user"; u.textContent = (att.length ? `[📎 ${att.join(",")}] ` : "") + text; chat.appendChild(u);
+  editor.textContent = ""; attachRow.innerHTML = "";
+  if (/^Crea todas las imágenes|^Las imágenes con identificador/.test(text)) return genImages(text);
+  if (att.length) return askVideoCost(text, att);
+  say("No entiendo (simulador).");
+});
+
+function genImages(text) {
+  const nums = [...text.matchAll(/\[(\d{3})\]/g)].map((m) => m[1]);
+  const retry = /^Las imágenes con identificador/.test(text);
+  const list = [...new Set(nums)];
+  const pend = list.map(() => addTile("flow-pending-tile"));
+  setTimeout(() => {
+    pend.forEach((p) => p.remove());
+    list.forEach((n) => {
+      if (P.get("policyImage") === String(+n) && !retry && !blockedOnce.has(n)) { blockedOnce.add(n); say(`[${n}]: Esta generación fue bloqueada por nuestras políticas de seguridad.`); return; }
+      const t = addTile("flow-image-tile", "caricature " + uid());
+      setTimeout(() => { t.querySelector(".footer-title").textContent = n; assets.unshift({ name: n, kind: "Imagen", tile: t }); }, T.rename);
+    });
+  }, T.image);
+}
+
+function askVideoCost(text, att) {
+  videoSends++;
+  if (P.get("rateLimitVideo") === String(videoSends)) { say('Estás preguntando demasiado rápido. Ve más despacio e inténtalo de nuevo. <button>Reintentar</button>'); return; }
+  const cost = P.get("cost") ? +P.get("cost") : /6\s*seconds?/i.test(text) ? 10 : 15;
+  setTimeout(() => {
+    const m = document.createElement("flow-permission-message");
+    m.className = "msg";
+    m.innerHTML = `¿Quieres que empiece a generar 1 vídeo, que cuesta ${cost} puntos?` +
+      ["Aprobar", "Aprobar siempre", "Rechazar"].map((l) => `<div class="option-row" role="radio" aria-label="${l}">${l}</div>`).join("");
+    m.querySelectorAll(".option-row").forEach((r) => r.addEventListener("click", () => {
+      m.querySelectorAll(".option-row").forEach((x) => { x.classList.add("read-only"); x.setAttribute("aria-disabled", "true"); });
+      const l = r.getAttribute("aria-label");
+      if (l === "Rechazar") return say("He cancelado la generación del vídeo.");
+      if (l === "Aprobar siempre") bump("mockApprovedAlways");
+      bump("mockApproved");
+      sessionStorage.setItem("mockPendingVideo", "1");
+      const p = addTile("flow-pending-tile");
+      setTimeout(() => { sessionStorage.setItem("mockPendingVideo", "0"); p.remove(); const t = addTile("flow-video-tile", "Animate " + uid()); assets.unshift({ name: "Animate", kind: "Vídeo", tile: t }); }, T.video);
+    }));
+    chat.appendChild(m);
+  }, 1200); // SIM: la IA "piensa"
+}
+
+// ---- menú "+"
+function closeOverlay() { overlay.innerHTML = ""; }
+document.getElementById("plus").addEventListener("click", () => {
+  closeOverlay();
+  const pop = document.createElement("flow-add-menu-popover-content");
+  const vp = document.createElement("cdk-virtual-scroll-viewport");
+  const pane = document.createElement("flow-add-menu-detail-pane");
+  pop.append(vp, pane); overlay.appendChild(pop);
+  setTimeout(() => { // SIM: la lista tarda en pintarse
+    for (const a of assets) {
+      const it = document.createElement("flow-add-menu-asset-item");
+      it.textContent = a.name + a.kind;
+      it.addEventListener("click", () => {
+        pane.innerHTML = `<div>Vista previa de ${a.name}</div><div class="bottom-actions"><button>Añadir a petición</button></div>`;
+        pane.querySelector("button").addEventListener("click", () => {
+          const c = document.createElement("div"); c.className = "attached"; c.dataset.label = a.name; c.textContent = a.name; attachRow.appendChild(c);
+          closeOverlay();
+        });
+      });
+      vp.appendChild(it);
+    }
+  }, 600);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeOverlay(); });
+for (const t of saved) { const el = addTile(t.tag, t.name, t.src); assets.unshift({ name: t.name, kind: t.tag === "flow-video-tile" ? "Vídeo" : "Imagen", tile: el }); }
+// Un vídeo que se estaba generando al recargar aparece igualmente al rato (SIM).
+if (+(sessionStorage.getItem("mockPendingVideo") || 0) > 0) {
+  sessionStorage.setItem("mockPendingVideo", "0");
+  const p = addTile("flow-pending-tile");
+  setTimeout(() => { p.remove(); const t = addTile("flow-video-tile", "Animate " + uid()); assets.unshift({ name: "Animate", kind: "Vídeo", tile: t }); }, T.video);
+}
+
+// ---- menú contextual + descarga
+grid.addEventListener("contextmenu", (e) => {
+  const tile = e.target.closest("flow-image-tile, flow-video-tile");
+  if (!tile) return;
+  e.preventDefault();
+  closeOverlay();
+  const menu = document.createElement("div"); menu.className = "ctx"; menu.style.left = e.clientX + "px"; menu.style.top = e.clientY + "px";
+  const isVideo = tile.tagName === "FLOW-VIDEO-TILE";
+  const items = isVideo ? ["Añadir a la petición", "downloadDescargar", "Cambiar nombre"] : ["Animar", "Añadir a la petición", "downloadDescargar"];
+  menu.innerHTML = items.map((t) => `<flow-menu-item role="menuitem">${t}</flow-menu-item>`).join("");
+  overlay.appendChild(menu);
+  menu.querySelectorAll("flow-menu-item").forEach((mi) => mi.addEventListener("click", () => {
+    const t = mi.textContent;
+    if (t === "Animar") { const c = document.createElement("div"); c.className = "attached"; c.dataset.label = tile.querySelector(".footer-title").textContent; attachRow.appendChild(c); closeOverlay(); return; }
+    if (t !== "downloadDescargar") return closeOverlay();
+    const sub = document.createElement("div"); sub.className = "ctx"; sub.style.left = e.clientX + 170 + "px"; sub.style.top = e.clientY + "px";
+    const opts = isVideo ? ["270p GIF animado", "720p Tamaño original", "1080p Resolución mejorada", "4K Actualizar"] : ["1K Tamaño original", "2K Resolución mejorada"];
+    sub.innerHTML = opts.map((o) => `<flow-menu-item role="menuitem">${o}</flow-menu-item>`).join("");
+    overlay.appendChild(sub);
+    sub.querySelectorAll("flow-menu-item").forEach((o) => o.addEventListener("click", () => {
+      closeOverlay();
+      // SIM: Flow prepara el archivo y lo entrega como blob con un nombre suyo,
+      // liberando la URL al instante (el caso más difícil para la extensión).
+      setTimeout(async () => {
+        const r = await fetch("/video.mp4?res=" + encodeURIComponent(o.textContent));
+        const url = URL.createObjectURL(await r.blob());
+        const a = document.createElement("a"); a.href = url; a.download = `caricature_footballer_${uid()}.mp4`;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      }, /1080p/.test(o.textContent) ? T.prep : 300);
+    }));
+  }));
+});
+</script>
+</body>
+</html>

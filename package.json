@@ -1,13 +1,16 @@
 {
   "name": "flow-batch-runner",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Extensión de Chrome que automatiza Google Flow para producir Shorts en lote (MUNDO FUT / The Odd Ledger).",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "test": "node --test tests/shared.test.js",
-    "check": "node --check extension/shared.js && node --check extension/content.js && node --check extension/popup.js && node --check extension/background.js && node -e \"JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8')); console.log('manifest OK')\"",
+    "check": "for f in extension/*.js tests/*.js tools/*.js; do node --check \"$f\" || exit 1; done && node -e \"JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8')); console.log('manifest OK')\" && node tests/check-ids.js",
     "verify": "npm run check && npm test",
-    "zip": "cd extension && zip -r ../flow-batch-extension.zip . -x '.DS_Store'"
+    "zip": "cd extension && zip -r ../flow-batch-extension.zip . -x '.DS_Store'",
+    "e2e": "xvfb-run -a node tests/e2e/run-e2e.js"
   }
 }
