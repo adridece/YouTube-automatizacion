@@ -41,6 +41,7 @@ const SCEN = {
   capture: { desc: "PREPARADAS (captura, como tras pulsar la cereza): caja sin pintar + vídeo atascado + lista del \"+\" con rAF, sin mirar nunca Flow", u2: "hiddenStall=1&lazyPanel=1&rafList=1", u3: "hiddenStall=1&lazyPanel=1&rafList=1", range: ["1-2", "3"], arm: true, expectNamed: true, expectPlusMenu: true },
   pm: { desc: "Caja de prompt ProseMirror REAL (lee su modelo), pestañas preparadas y sin foco", u2: "pm=1", u3: "pm=1", range: ["1-2", "3"], arm: true, expectNamed: true },
   sendenter: { desc: "Flow que ignora el clic y solo envía con Enter (ProseMirror real): la extensión debe encontrar el método sin duplicar envíos", u2: "pm=1&sendNeeds=enter", u3: "pm=1&sendNeeds=enter", range: ["1-2", "3"], arm: true, expectNamed: true, expectEnter: true },
+  trusted: { desc: "Flow real según el log v2.4.0: solo envía con FOCO y clic REAL; pestañas preparadas, sin mirarlas", u2: "pm=1&needsTrusted=1&needsFocus=1", u3: "pm=1&needsTrusted=1&needsFocus=1", range: ["1-2", "3"], arm: true, expectNamed: true, checkDetach: true },
   long: { desc: "Un vídeo tarda 6 min con la pestaña oculta (frenado intensivo de Chrome)", u2: "videoMs=360000", u3: "", range: ["1", "3"], expectPlanB: false, timeoutMin: 12 },
 };
 
@@ -131,7 +132,12 @@ async function run(name, sc) {
     const names = [...wantScenes, 3].map((n) => `mundofut_${String(n).padStart(3, "0")}.mp4`);
     check(`vídeos guardados: ${names.join(", ")}`, names.every((n) => files[n] === 350000) && Object.keys(files).length === names.length, JSON.stringify(files));
     if (sc.expectPlanB) check('plan B "Animar" usado al no pintarse la lista', /adjuntada con "Animar"/.test(log));
-    if (sc.expectEnter) check('encontró el envío con "Enter" y lo usó primero después', /aceptó el envío con "Enter"/.test(log) && !/Flow no aceptó el envío/.test(log));
+    if (sc.name === "trusted" || sc.checkDetach) {
+      await sleep(1500);
+      const att = await ev(`const t = await chrome.debugger.getTargets(); return t.filter((x) => x.url.includes("flow.google.com") && x.attached).length;`);
+      check("al terminar, la extensión suelta el depurador (desaparece la barra)", att === 0, `${att} pestañas de Flow aún enganchadas`);
+    }
+    if (sc.expectEnter) check('encontró el envío con Enter (real o simulado) y lo usó primero después', /aceptó el envío con "Enter(Real)?"/.test(log) && !/Flow no aceptó el envío/.test(log));
     if (sc.expectPlusMenu) check('la lista del "+" se pintó con la pestaña oculta (sin plan B)', (log.match(/adjuntada con el menú "\+"/g) || []).length === 3 && !/plan B/.test(log));
     if (sc.expectNamed) check("cada vídeo encontrado por el nombre que puso el Agent", (log.match(/y renombrado "mundofut_00\d_\d{4}"/g) || []).length === 3 && !/Aparecieron \d+ vídeos/.test(log), `${(log.match(/y renombrado/g) || []).length} renombrados`);
     if (sc.expectRetries) check("se reintentó suavizando (imagen 3 rondas, vídeo 2 reintentos) hasta conseguirlo", /ronda 3\/5/.test(log) && (log.match(/Reintento \d\/6: pido al Agent el mismo vídeo/g) || []).length >= 2);
@@ -157,7 +163,7 @@ async function run(name, sc) {
   }).listen(8443);
   const all = [];
   try {
-    for (const n of (process.env.FBR_BG || "capture,normal,raf,stall,retry,pm,sendenter").split(",")) all.push(...(await run(n, SCEN[n])));
+    for (const n of (process.env.FBR_BG || "trusted,capture,normal,raf,stall,retry,pm,sendenter").split(",")) all.push(...(await run(n, SCEN[n])));
   } finally {
     server.close();
   }

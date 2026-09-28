@@ -220,6 +220,7 @@ chrome.alarms.onAlarm.addListener(async (a) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const a = await getArmed();
   if (a[tabId]) { await setArmed(tabId, null); offscreenCall({ type: "CAPTURE_STOP", tabId }).catch(() => {}); }
+  dbgTabs.delete(tabId);
   const tabs = await getRunningTabs();
   if (!tabs[tabId]) return;
   const acc = tabs[tabId];
@@ -271,6 +272,60 @@ async function armTab(tabId, quiet) {
   await setArmed(tabId, acc);
   if (!quiet) blog("ok", `Pestaña de ${acc} preparada para segundo plano: Chrome la seguirá procesando aunque mires otra pestaña. Verás en ella el icono de "compartiendo": es la extensión manteniéndola activa (no se graba ni se envía nada).`, { acc, phase: "setup" });
   return { ok: true, acc };
+}
+
+// ------------------------------------------- FOCO Y PULSACIONES REALES (depurador)
+// PRUEBA REAL v2.4.0: con la pestaña preparada pero SIN foco (usuario en otra
+// pestaña), Flow no acepta el envío: ni clic, ni Enter, ni ninguna forma de
+// escribir (log "foco: no"). Con chrome.debugger (autorizado por el usuario):
+//  - Emulation.setFocusEmulationEnabled: la pestaña cree que tiene el foco;
+//  - Input.*: clic, texto y teclas REALES (isTrusted), de reserva.
+// SOLO en las pestañas de Flow y SOLO mientras hay un lote en marcha: al
+// terminar se suelta. Chrome muestra mientras tanto la barra "Cerezium ha
+// empezado a depurar este navegador".
+const dbgTabs = new Set();
+async function dbgEnsure(tabId) {
+  if (!chrome.debugger) throw new Error("este navegador no permite chrome.debugger");
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || "")) throw new Error("solo se usa en pestañas de Flow");
+  if (!dbgTabs.has(tabId)) {
+    try {
+      await chrome.debugger.attach({ tabId }, "1.3");
+    } catch (e) {
+      if (!/already attached/i.test(String(e && e.message))) throw e;
+    }
+    dbgTabs.add(tabId);
+  }
+  await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true });
+}
+async function dbgDetach(tabId) {
+  if (!dbgTabs.has(tabId)) return;
+  dbgTabs.delete(tabId);
+  await chrome.debugger.detach({ tabId }).catch(() => {});
+}
+if (chrome.debugger) {
+  chrome.debugger.onDetach.addListener(async (src, reason) => {
+    if (src.tabId == null || !dbgTabs.has(src.tabId)) return;
+    dbgTabs.delete(src.tabId);
+    const running = await getRunningTabs();
+    if (reason === "canceled_by_user" && running[src.tabId]) {
+      blog("warn", `Se cerró la barra "Cerezium ha empezado a depurar este navegador" con un lote en marcha (${running[src.tabId]}). Sin ella Flow no acepta los envíos sin mirarlo; la reactivo en el próximo envío.`, { acc: running[src.tabId] });
+    }
+  });
+}
+async function dbgCmd(tabId, method, params) {
+  await dbgEnsure(tabId);
+  return chrome.debugger.sendCommand({ tabId }, method, params || {});
+}
+async function dbgClick(tabId, x, y) {
+  await dbgCmd(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+  await dbgCmd(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+  await dbgCmd(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+}
+async function dbgEnter(tabId) {
+  const k = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+  await dbgCmd(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...k, text: "\r", unmodifiedText: "\r" });
+  await dbgCmd(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...k });
 }
 
 // ----------------------------------------------------------- PESTAÑAS
@@ -618,7 +673,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (tabId != null) await setRunningTab(tabId, msg.acc, !!msg.on);
         return { ok: true };
       case "RUN_COMPLETE":
-        if (tabId != null) await setRunningTab(tabId, msg.acc, false);
+        if (tabId != null) { await setRunningTab(tabId, msg.acc, false); await dbgDetach(tabId); }
         await markStepDone(msg.acc, msg.summary);
         return { ok: true };
       case "RUN_PLAN":
@@ -683,6 +738,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         return { ok: true };
       }
+      case "DBG_ON":
+        try { await dbgEnsure(tabId); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+      case "DBG_CLICK":
+        try { await dbgClick(tabId, msg.x, msg.y); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+      case "DBG_TYPE":
+        try { await dbgCmd(tabId, "Input.insertText", { text: msg.text }); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+      case "DBG_ENTER":
+        try { await dbgEnter(tabId); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
       case "OPEN_PANEL":
         return { ok: true, how: await openFloatingWindow() };
       case "SET_UI_MODE":

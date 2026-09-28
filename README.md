@@ -19,6 +19,11 @@ sesión: la pestaña queda "preparada" (Chrome muestra en ella el icono de *comp
 graba ni se envía nada). Después puedes usar otras pestañas: Chrome sigue procesando Flow como si lo miraras. La extensión nunca te
 cambia de pestaña, impide que Chrome descarte esas pestañas y que el ordenador se duerma. No cierres las pestañas de Flow.
 
+**Barra "Cerezium ha empezado a depurar este navegador" (v2.5)**: Flow solo acepta los envíos si su pestaña cree tener el foco.
+Durante el lote, la extensión usa el depurador de Chrome (permiso `debugger`, autorizado por el usuario) SOLO en las pestañas de
+Flow para simular el foco y, si hace falta, pulsar "generar" como un clic real. Chrome lo indica con esa barra: **no la cierres**;
+desaparece sola al terminar el lote.
+
 ## Antes de cada lote (lo repite el checklist del panel)
 - **Flow** → Ajustes ⚙ → "Configuración del agente": *Confirmar antes de generar* = **Siempre**; vídeo = **Omni 1.1 Flash**; 9:16 y x1.
 - Un **proyecto nuevo** en cada cuenta (`/u/2/`, `/u/3/`), con su pestaña abierta (puede estar en segundo plano).
