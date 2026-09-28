@@ -360,10 +360,31 @@ function renderProgress() {
   $("stop2").hidden = !anyRunning;
   $("start").hidden = anyRunning;
   const chip = $("globalStatus");
-  if (!list.length) { root.innerHTML = '<div class="empty">Aún no hay ningún lote.<br>Configúralo en «Lote» y pulsa Iniciar.</div>'; chip.textContent = "Inactivo"; chip.className = "chip"; $("progBadge").hidden = true; return; }
+  if (!list.length) { root.innerHTML = '<div class="empty"><img src="icons/cerezium.svg" alt="" /><b>Aún no hay ningún lote</b><span>Configúralo en «Lote» y pulsa «Iniciar lote».</span></div>'; chip.textContent = "Inactivo"; chip.className = "chip"; $("progBadge").hidden = true; return; }
 
   let totalPct = 0;
-  root.innerHTML = list.map((b) => {
+  // Resumen global: anillo con el % y contadores de escenas.
+  let nDone = 0, nRun = 0, nBad = 0, nAll = 0;
+  for (const b of list) {
+    const sm = summarizeBatch(b);
+    nAll += b.order.length;
+    nDone += sm.done.length;
+    nBad += sm.failed.length + sm.review.length + sm.nopoints.length;
+    nRun += b.order.filter((n) => ["image", "video", "download"].some((k) => b.scenes[n][k] === "running")).length;
+  }
+  const globalPct = Math.round(list.reduce((a, b) => a + summarizeBatch(b).percent, 0) / list.length);
+  const since = Math.min(...list.map((b) => b.createdAt || Date.now()));
+  const mins = Math.max(0, Math.round((Date.now() - since) / 60000));
+  const hero = `<section class="card hero" aria-label="Resumen">
+      <div class="ring" style="--p:${globalPct}"><b>${globalPct}<small>%</small></b></div>
+      <div class="stats">
+        <div class="stat ok"><b>${nDone}</b><span>listas</span></div>
+        <div class="stat run"><b>${nRun}</b><span>en curso</span></div>
+        <div class="stat bad"><b>${nBad}</b><span>a revisar</span></div>
+      </div>
+      <p class="hero-t">${nAll} escena(s) · ${list.length} cuenta(s) · ${mins < 1 ? "empezado ahora" : `hace ${mins} min`}</p>
+    </section>`;
+  root.innerHTML = hero + list.map((b) => {
     const sum = summarizeBatch(b);
     totalPct += sum.percent;
     const statusTxt = b.status === "running" ? PHASE_TEXT[b.phase] || "En curso" : { done: "Terminado", stopped: "Detenido", error: "Parado por error", nopoints: "Sin puntos" }[b.status] || b.status;
@@ -388,7 +409,7 @@ function renderProgress() {
   if (anyRunning) { chip.textContent = `En curso · ${pct}%`; chip.className = "chip running"; }
   else {
     const bad = list.some((b) => { const s = summarizeBatch(b); return s.failed.length || s.review.length || s.nopoints.length || b.status !== "done"; });
-    chip.textContent = bad ? "Terminado con avisos" : "Terminado";
+    chip.textContent = bad ? "Con avisos" : "Terminado";
     chip.className = bad ? "chip warn" : "chip ok";
   }
   const badge = $("progBadge");

@@ -1139,34 +1139,35 @@ const ui = (() => {
     root.innerHTML = `<style>
       :host{all:initial}
       *{box-sizing:border-box;font-family:"Google Sans",Roboto,system-ui,sans-serif}
-      .pill{display:flex;align-items:center;gap:8px;max-width:330px;padding:7px 12px 7px 9px;border-radius:999px;border:1px solid #3a3f4b;background:rgba(24,26,32,.94);color:#e8eaed;font-size:12px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.35);backdrop-filter:blur(6px);transition:transform .15s,border-color .15s}
-      .pill:hover{transform:translateY(-1px);border-color:#5b6272}
-      .pill:focus-visible,button:focus-visible{outline:2px solid #8ab4f8;outline-offset:2px}
-      .dot{width:9px;height:9px;border-radius:50%;background:#8ab4f8;flex:none}
+      .pill{display:flex;align-items:center;gap:8px;max-width:330px;padding:7px 12px 7px 9px;border-radius:999px;border:1px solid #34343a;background:rgba(20,20,22,.94);color:#f4f1f2;font-size:12px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.35);backdrop-filter:blur(6px);transition:transform .15s,border-color .15s}
+      .pill:hover{transform:translateY(-1px);border-color:#4a4a52}
+      .pill:focus-visible,button:focus-visible{outline:2px solid #ff4d6d;outline-offset:2px}
+      .dot{width:9px;height:9px;border-radius:50%;background:#ff4d6d;flex:none}
       .dot.run{animation:pulse 1.4s infinite}
-      .ok .dot{background:#81c995}.warn .dot{background:#fdd663}.error .dot{background:#f28b82}
-      .error.pill{border-color:#f28b82}
+      .ok .dot{background:#f5c2cd}.warn .dot{background:#ffbf5e}.error .dot{background:#ff8a5c}
+      .error.pill{border-color:#ff8a5c}
       @keyframes pulse{50%{opacity:.35}}
       @media (prefers-reduced-motion:reduce){.dot.run{animation:none}.pill{transition:none}}
       .txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      .card{width:340px;margin-bottom:8px;padding:12px;border-radius:14px;border:1px solid #3a3f4b;background:rgba(24,26,32,.97);color:#e8eaed;font-size:12px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+      .card{width:340px;margin-bottom:8px;padding:12px;border-radius:14px;border:1px solid #34343a;background:rgba(20,20,22,.97);color:#f4f1f2;font-size:12px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
       .row{display:flex;align-items:center;justify-content:space-between;gap:8px}
       h2{margin:0;font-size:13px;font-weight:600}
       .brand{display:flex;align-items:center;gap:6px}
-      .bar{height:6px;border-radius:99px;background:#2d313b;overflow:hidden;margin:10px 0}
-      .bar>i{display:block;height:100%;background:linear-gradient(90deg,#8ab4f8,#c58af9);transition:width .4s}
+      .bar{height:6px;border-radius:99px;background:#1b1b1e;overflow:hidden;margin:10px 0}
+      .bar>i{display:block;height:100%;background:linear-gradient(90deg,#ff4d6d,#a3142f);transition:width .4s}
       .scenes{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
-      .sc{display:flex;align-items:center;gap:3px;padding:3px 6px;border-radius:8px;background:#23262e;border:1px solid #30343e;font-variant-numeric:tabular-nums}
+      .sc{display:flex;align-items:center;gap:3px;padding:3px 6px;border-radius:8px;background:#1b1b1e;border:1px solid #26262a;font-variant-numeric:tabular-nums}
       .sc b{font-weight:600;margin-right:2px}
-      .s-pending{color:#6f7480}.s-running{color:#8ab4f8}.s-done{color:#81c995}.s-failed,.s-nopoints{color:#f28b82}.s-review{color:#fdd663}.s-skipped{color:#6f7480;opacity:.5}
-      .log{color-scheme:dark;max-height:150px;overflow:auto;font:11px/1.45 ui-monospace,Consolas,monospace;background:#15171c;border-radius:8px;padding:6px 8px;color:#bdc1c6}
-      .log .error{color:#f28b82}.log .warn{color:#fdd663}.log .ok{color:#81c995}
-      .btns{display:flex;gap:6px;margin-top:8px}
-      button{font:inherit;font-size:12px;color:#e8eaed;background:#2d313b;border:1px solid #3a3f4b;border-radius:8px;padding:5px 10px;cursor:pointer}
-      button:hover{background:#363b47}
-      button.danger{background:#5c2b29;border-color:#8c3a36}
-      .fatal{margin-bottom:8px;padding:8px;border-radius:8px;background:#5c2b29;color:#fce8e6}
-      .cd{display:flex;gap:6px;align-items:center;margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#2b2f3a;color:#e8eaed;font-size:12px;border:1px solid #8ab4f8}
+      .s-pending{color:#6f696c}.s-running{color:#ff4d6d}.s-done{color:#f5c2cd}.s-failed,.s-nopoints{color:#ff8a5c}.s-review{color:#ffbf5e}.s-skipped{color:#6f696c;opacity:.5}
+      .log{color-scheme:dark;max-height:150px;overflow:auto;font:11px/1.45 ui-monospace,Consolas,monospace;background:#09090a;border-radius:8px;padding:6px 8px;color:#cfc8cb}
+      .log .error{color:#ff8a5c}.log .warn{color:#ffbf5e}.log .ok{color:#f5c2cd}
+      .btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+      .btns button{white-space:nowrap;padding:5px 9px}
+      button{font:inherit;font-size:12px;color:#f4f1f2;background:#1b1b1e;border:1px solid #34343a;border-radius:8px;padding:5px 10px;cursor:pointer}
+      button:hover{background:#26262a}
+      button.danger{background:#4a0e1d;border-color:#a3142f}
+      .fatal{margin-bottom:8px;padding:8px;border-radius:8px;background:#4a0e1d;color:#ffd6de}
+      .cd{display:flex;gap:6px;align-items:center;margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#1b1b1e;color:#f4f1f2;font-size:12px;border:1px solid #ff4d6d}
     </style><div id="wrap"></div>`;
     (document.body || document.documentElement).appendChild(host);
     chrome.storage.local.get("fbrPagePanel").then((d) => {
@@ -1205,13 +1206,13 @@ const ui = (() => {
       const lines = localLog.slice(-40).map((e) => `<div class="${e.level}">${esc(formatLogEntry(e))}</div>`).join("");
       card = `<div class="card" role="region" aria-label="Cerezium Autopilot">
         ${st.fatal ? `<div class="fatal" role="alert">${esc(st.fatal)}</div>` : ""}
-        <div class="row"><h2 class="brand"><svg viewBox="0 0 128 128" width="18" height="18" aria-hidden="true"><path d="M67 27C62 44 52 58 45 72M67 27C71 45 78 57 86 67" fill="none" stroke="#8fd9a8" stroke-width="7" stroke-linecap="round"/><path d="M67 27C74 15 90 12 101 19C93 31 78 34 67 27Z" fill="#43c07f"/><circle cx="44" cy="86" r="21" fill="#f0284f"/><circle cx="87" cy="81" r="21" fill="#f0284f"/></svg>Cerezium · ${esc(ACC)}</h2><span>${pct}%</span></div>
+        <div class="row"><h2 class="brand"><svg viewBox="0 0 128 128" width="18" height="18" aria-hidden="true"><path d="M67 27C62 44 52 58 45 72M67 27C71 45 78 57 86 67" fill="none" stroke="#e79aab" stroke-width="7" stroke-linecap="round"/><path d="M67 27C74 15 90 12 101 19C93 31 78 34 67 27Z" fill="#a3142f"/><circle cx="44" cy="86" r="21" fill="#f0284f"/><circle cx="87" cy="81" r="21" fill="#f0284f"/></svg>Cerezium · ${esc(ACC)}</h2><span>${pct}%</span></div>
         <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
-        <div class="scenes">${scenes || '<span style="color:#9aa0a6">Sin lote en esta cuenta.</span>'}</div>
-        <div class="log" id="log" aria-live="polite">${lines || '<div style="color:#6f7480">El log aparecerá aquí.</div>'}</div>
+        <div class="scenes">${scenes || '<span style="color:#a9a2a5">Sin lote en esta cuenta.</span>'}</div>
+        <div class="log" id="log" aria-live="polite">${lines || '<div style="color:#6f696c">El log aparecerá aquí.</div>'}</div>
         <div class="btns">
           ${runningNow ? '<button class="danger" id="stop">Detener</button>' : ""}
-          <button id="panel">Panel de control</button><button id="copy">Copiar log</button><button id="move" title="Mover a otra esquina">Mover</button><button id="min">Plegar</button>
+          <button id="panel" title="Abrir el panel de control de Cerezium">Panel</button><button id="copy">Copiar log</button><button id="move" title="Mover a otra esquina">Mover</button><button id="min">Plegar</button>
         </div></div>`;
     }
     const cd = st.countdown ? `<div class="cd" role="alert"><span>${esc(st.countdown.text.replace("{s}", st.countdown.left))}</span><button id="cdGo">Ya</button><button id="cdNo">Cancelar</button></div>` : "";
