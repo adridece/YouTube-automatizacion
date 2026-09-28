@@ -9,8 +9,9 @@ MUNDO FUT (sirve igual para The Odd Ledger). **Contexto completo del proyecto: [
 ## Instalar en Chrome
 1. `chrome://extensions` → activa **Modo de desarrollador** → **Cargar descomprimida** → elige la carpeta **`extension/`**.
 2. Tras cualquier cambio de código: botón ⟳ de la extensión **y F5 en las pestañas de Flow**.
-3. Pulsa el icono de la extensión (la cereza): se abre el **panel lateral** o, si tu navegador no lo tiene, la **ventanita** de
-   extensión. Se elige en Opciones avanzadas; el botón ↗ la abre en una ventana flotante pequeña para verla junto a Flow.
+3. Pulsa el icono de la extensión (la cereza): se abre la **ventanita** típica de extensión (desde la v2.6; el panel lateral
+   estrechaba la página de Flow y la automatización fallaba — sigue disponible en Opciones avanzadas, no recomendado). El botón ↗
+   la abre en una ventana flotante pequeña, aparte, para verla junto a Flow sin tocar su tamaño.
 4. Al actualizar a la 2.1, Chrome pide aceptar un permiso nuevo ("cambiar la configuración de los sitios"): es para permitir las
    descargas automáticas de flow.google.com, sin eso Chrome retiene el 2.º vídeo y siguientes cuando Flow está en segundo plano.
 
@@ -37,10 +38,12 @@ desaparece sola al terminar el lote.
 Panel → **Lote**: pega el kit completo → cuentas y rangos (A: `2` · `1-5` · 1080p; B: `3` · `6-8` · 720p) → nombre de archivo →
 **Iniciar lote**. La pestaña **Progreso** muestra cada escena (imagen · vídeo · descarga) y **Log** todo lo que pasa, con
 **Copiar log**. En la página de Flow hay una píldora plegable abajo a la izquierda (se puede mover de esquina).
-Cada vídeo debe costar **10 puntos**; si Flow pide más, la extensión pulsa "Rechazar", deja de generar en esa cuenta y te lo dice.
+Cada vídeo debe costar **10 puntos** (lo fija la duración: 6 s). La extensión pulsa "Aprobar" (nunca "Aprobar siempre") solo si
+el aviso pide ≤ 10. Si pide más (p. ej. 12), pulsa "Rechazar" (gratis) y vuelve a enviar el prompt remarcando los 6 segundos, hasta
+3 veces; si sigue pidiendo más, esa escena queda fallida (con su número en el log) y sigue con las demás.
 
 ## Primera prueba de la v2 (en este orden; las dos primeras cuestan 0 puntos)
-1. Recarga la extensión (⟳) y pulsa F5 en tus pestañas de Flow. Abre el panel lateral (icono de la extensión).
+1. Recarga la extensión (⟳) y pulsa F5 en tus pestañas de Flow. Abre la ventanita (icono de la extensión).
 2. Salida → **Elegir** → Escritorio (o crea `Escritorio/MundoFut`). Debe poner "· con permiso".
 3. **Prueba A — descarga (0 puntos)**: en un proyecto con vídeos ya generados. Opciones avanzadas → "PRUEBA de descarga", una sola
    cuenta, rango `1-2`, **Iniciar lote**. Esperado: carpeta nueva `Escritorio/<fecha>_<hora>_mundofut/` con `mundofut_001.mp4` y

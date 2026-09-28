@@ -42,7 +42,12 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (28 sep 2026 — v2.5.0, "Cerezium Autopilot")
+## Estado actual (28 sep 2026 — v2.6.0, "Cerezium Autopilot")
+v2.6 (tras la prueba real de la v2.5): el icono abre la **ventanita** (popup) por defecto — el panel lateral estrechaba Flow y
+rompía la automatización; imágenes reconocidas aunque el Agent las nombre "Imagen 006"/"006.png"; vídeo a 12 puntos →
+"Rechazar" y reenvío remarcando los 6 s (hasta 3), nunca "Aprobar siempre"; si un vídeo empieza sin aviso de coste se para
+de generar en esa cuenta. BUG_HISTORY #55–58 (SIN VERIFICAR en real).
+
 Rehecha entera en la ronda del 28 sep (ver `docs/BUG_HISTORY.md` #22–34): log persistente, panel lateral, descargas de una en una
 con destino "Carpeta elegida" (sin diálogo aunque "Preguntar dónde guardar" esté activado — el usuario lo quiere activado),
 cuentas en paralelo, reanudación tras F5, límite de ritmo. **Todo probado con Chromium real + Flow SIMULADO (`npm run e2e`, 44/44)**,
