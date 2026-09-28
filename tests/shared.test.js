@@ -217,3 +217,21 @@ test("resolutionFallbacks", () => {
   assert.deepStrictEqual(Array.from(S.resolutionFallbacks("720p", "video")), ["720p", "1080p"]);
   assert.deepStrictEqual(Array.from(S.resolutionFallbacks("1080p", "image")), ["1K", "2K"]);
 });
+
+test("buildVideoTileName / tileLooksInProgress (v2.2)", () => {
+  assert.strictEqual(S.buildVideoTileName("mundofifa", 1, "2026-09-28_1259_mundofifa"), "mundofifa_001_1259");
+  assert.strictEqual(S.buildVideoTileName("x y", 12, ""), "x_y_012");
+  assert.ok(S.tileLooksInProgress("100%"));
+  assert.ok(S.tileLooksInProgress("Generando… 57 %"));
+  assert.ok(!S.tileLooksInProgress("mundofifa_001_1259"));
+  assert.ok(!S.tileLooksInProgress(""));
+});
+
+test("buildSoftenNote: cada intento suaviza más sin cambiar la escena", () => {
+  assert.strictEqual(S.buildSoftenNote("video", 1), "");
+  assert.ok(S.buildSoftenNote("video", 2).includes("un poco más suave"));
+  assert.ok(S.buildSoftenNote("video", 2).includes("6 seconds"));
+  const n4 = S.buildSoftenNote("image", 4);
+  assert.ok(n4.startsWith("(Intento 4"));
+  assert.ok(n4.includes("misma escena"));
+});

@@ -83,7 +83,7 @@ TABS.forEach((t, i) => {
 
 // ------------------------------------------------------------ FORMULARIO
 const FORM_KEY = "fbrForm";
-const FIELDS = ["prompts", "accA_on", "accA_num", "accA_range", "accA_res", "accB_on", "accB_num", "accB_range", "accB_res", "nameFormat", "prefix", "genMode", "maxWait", "autoRun"];
+const FIELDS = ["prompts", "accA_on", "accA_num", "accA_range", "accA_res", "accB_on", "accB_num", "accB_range", "accB_res", "nameFormat", "prefix", "genMode", "maxWait", "maxRetries", "autoRun"];
 function radio(name) { const r = document.querySelector(`input[name="${name}"]:checked`); return r ? r.value : null; }
 function setRadio(name, v) { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; }
 
@@ -301,6 +301,7 @@ $("start").addEventListener("click", async () => {
       nameFormat: f.nameFormat,
       resolution: a.resolution,
       maxWaitMs: Math.max(3, parseInt(f.maxWait, 10) || 10) * 60000,
+      maxRetries: Math.min(15, Math.max(1, parseInt(f.maxRetries, 10) || 6)),
       destMode: f.dest,
       batchFolder,
       batchId,

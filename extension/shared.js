@@ -440,3 +440,31 @@ function resolutionFallbacks(resolution, kind) {
   if (resolution === "720p") return ["720p", "1080p"];
   return ["1080p", "720p"];
 }
+
+// Nombre que se pide al Agent para cada VÍDEO (v2.2): único por lote para no
+// confundirlo con vídeos de lotes anteriores en el mismo proyecto.
+// ("mundofifa", 1, "2026-09-28_1259_mundofifa") -> "mundofifa_001_1259"
+function buildVideoTileName(prefix, num, batchFolder) {
+  const m = String(batchFolder || "").match(/^\d{4}-\d{2}-\d{2}_(\d{4})_/);
+  return `${sanitizeName(prefix, "clip")}_${pad3(num)}${m ? "_" + m[1] : ""}`;
+}
+
+// ¿Un tile de vídeo sigue procesándose? (muestra "57%", "100%", "Generando"…)
+function tileLooksInProgress(text) {
+  return /\b\d{1,3}\s?%|generando|en cola|procesando|preparando/i.test(String(text || ""));
+}
+
+// Nota que se añade al reintentar una imagen o un vídeo bloqueado (v2.2): cada
+// intento pide suavizar un poco más, SIN cambiar la escena (composición,
+// encuadre, estilo, acción y, en vídeo, movimiento y duración).
+function buildSoftenNote(kind, attempt) {
+  if (attempt <= 1) return "";
+  const what = kind === "video" ? "esta descripción de movimiento" : "este prompt";
+  const keep = kind === "video"
+    ? "Mantén exactamente la misma escena, el mismo movimiento de cámara, el mismo estilo y la duración de 6 seconds."
+    : "Mantén exactamente la misma escena, composición, encuadre y estilo.";
+  if (attempt === 2) {
+    return `(El intento anterior falló o fue bloqueado por las políticas de contenido. Reformula ${what} de forma un poco más suave y segura, sin cambiar la idea. ${keep})`;
+  }
+  return `(Intento ${attempt}: ha vuelto a bloquearse. Suaviza más ${what}: sustituye cualquier elemento que pueda considerarse violento, sexual, peligroso, de marca/logotipo o de una persona real identificable por equivalentes neutros o genéricos. ${keep})`;
+}

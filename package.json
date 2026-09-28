@@ -1,6 +1,6 @@
 {
   "name": "cerezium-autopilot",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Cerezium Autopilot: extensión de Chrome que automatiza Google Flow para producir Shorts en lote (MUNDO FUT / The Odd Ledger).",
   "engines": {

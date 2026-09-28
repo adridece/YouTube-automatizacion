@@ -33,7 +33,11 @@ const EXT_ID = [...crypto.createHash("sha256").update(EXT).digest("hex").slice(0
 
 const SCEN = {
   normal: { desc: "Flow en pestañas de fondo; el usuario en otra pestaña", u2: "", u3: "", range: ["1-2", "3"], expectPlanB: false },
-  raf: { desc: 'Fondo + la lista del "+" solo se pinta a la vista (peor caso)', u2: "rafList=1", u3: "rafList=1", range: ["1-2", "3"], expectPlanB: true },
+  raf: { desc: 'Fondo + la lista del "+" solo se pinta con fotogramas (rAF): el modo "despierto" la hace pintarse', u2: "rafList=1", u3: "rafList=1", range: ["1-2", "3"], expectPlusMenu: true },
+  stall: { desc: 'Problemas reales del usuario: vídeo atascado al "100%" y caja de prompt sin pintar mientras la pestaña está oculta', u2: "hiddenStall=1&lazyPanel=1", u3: "hiddenStall=1&lazyPanel=1", range: ["1-2", "3"], expectPlanB: false, expectNamed: true },
+  retry: { desc: "La imagen 002 se bloquea 3 veces y los 2 primeros vídeos también: se reintenta suavizando hasta que salen", u2: "policyImage=2&policyImageTimes=3&policyVideo=2", u3: "", range: ["1-2", "3"], expectPlanB: false, expectRetries: true },
+  lazy: { desc: "Solo caja de prompt sin pintar estando oculta", u2: "lazyPanel=1", u3: "lazyPanel=1", range: ["1-2", "3"] },
+  stallonly: { desc: 'Solo vídeo atascado al "100%" estando oculta', u2: "hiddenStall=1", u3: "hiddenStall=1", range: ["1-2", "3"], expectNamed: true },
   long: { desc: "Un vídeo tarda 6 min con la pestaña oculta (frenado intensivo de Chrome)", u2: "videoMs=360000", u3: "", range: ["1", "3"], expectPlanB: false, timeoutMin: 12 },
 };
 
@@ -111,6 +115,9 @@ async function run(name, sc) {
     const names = [...wantScenes, 3].map((n) => `mundofut_${String(n).padStart(3, "0")}.mp4`);
     check(`vídeos guardados: ${names.join(", ")}`, names.every((n) => files[n] === 350000) && Object.keys(files).length === names.length, JSON.stringify(files));
     if (sc.expectPlanB) check('plan B "Animar" usado al no pintarse la lista', /adjuntada con "Animar"/.test(log));
+    if (sc.expectPlusMenu) check('la lista del "+" se pintó con la pestaña oculta (sin plan B)', (log.match(/adjuntada con el menú "\+"/g) || []).length === 3 && !/plan B/.test(log));
+    if (sc.expectNamed) check("cada vídeo encontrado por el nombre que puso el Agent", (log.match(/y renombrado "mundofut_00\d_\d{4}"/g) || []).length === 3 && !/Aparecieron \d+ vídeos/.test(log), `${(log.match(/y renombrado/g) || []).length} renombrados`);
+    if (sc.expectRetries) check("se reintentó suavizando (imagen 3 rondas, vídeo 2 reintentos) hasta conseguirlo", /ronda 3\/5/.test(log) && (log.match(/Reintento \d\/6: pido al Agent el mismo vídeo/g) || []).length >= 2);
     void want;
   } finally {
     chrome.kill();
@@ -132,7 +139,7 @@ async function run(name, sc) {
   }).listen(8443);
   const all = [];
   try {
-    for (const n of (process.env.FBR_BG || "normal,raf").split(",")) all.push(...(await run(n, SCEN[n])));
+    for (const n of (process.env.FBR_BG || "normal,raf,stall,retry").split(",")) all.push(...(await run(n, SCEN[n])));
   } finally {
     server.close();
   }

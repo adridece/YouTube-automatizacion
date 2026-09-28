@@ -64,7 +64,7 @@ const CONFIG = {
   assetListWaitMs: 10000,
   rateLimitMaxRetries: 4,
   download: { createdTimeoutMs: 180000, completeTimeoutMs: 300000, attempts: 3 },
-  maxAttemptsPerScene: 2,
+  maxAttemptsPerScene: 6, // por defecto; se cambia en el panel (Opciones avanzadas)
 };
 
 const ACC = getFlowAccountKey(location.href);
@@ -146,7 +146,10 @@ new MutationObserver(() => {
   const n = Date.now();
   if (n - lastMutationWake > 250) { lastMutationWake = n; wakeAll(); }
 }).observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class", "aria-disabled", "disabled"] });
-setInterval(wakeAll, 1000);
+setInterval(() => { wakeAll(); if (running) document.dispatchEvent(new CustomEvent("fbr-tick")); }, 1000);
+
+// Modo "despierto" de page-hook.js (solo mientras hay un lote en marcha).
+function setBackgroundMode(on) { document.dispatchEvent(new CustomEvent(on ? "fbr-bg-on" : "fbr-bg-off")); }
 
 function waitFor(cond, timeoutMs, desc, opts) {
   const stoppable = !(opts && opts.stoppable === false);
@@ -294,6 +297,9 @@ function snapshotTiles() {
 function newVideoTiles(before) {
   return $$(CONFIG.videoTileTag).filter((t) => !before.videoNodes.has(t) && !before.videoKeys.includes(tileKey(t)));
 }
+function tileReady(t) { return !tileLooksInProgress(t.textContent); }
+function videoTilesByTitle(name) { return $$(CONFIG.videoTileTag).filter((t) => tileTitle(t) === name); }
+
 function imageTilesByLabel(label) {
   return $$(CONFIG.imageTileTag).filter((t) => tileTitle(t) === label);
 }
@@ -514,15 +520,18 @@ async function phaseImages(cfg, isResume) {
   let missing = todo.filter((n) => !present(n));
   for (const n of todo.filter(present)) await setStep(n, "image", "done");
 
-  for (let round = 1; round <= 2 && missing.length; round++) {
+  const maxRounds = Math.max(1, (cfg.maxRetries || 6) - 1);
+  for (let round = 1; round <= maxRounds && missing.length; round++) {
+    throwIfStopped();
     const labels = missing.map(pad3);
-    log("warn", `Faltan (o fueron bloqueadas) las imágenes ${labels.join(", ")}. Pido al Agent que las reformule y las repita (ronda ${round}/2).`);
+    log("warn", `Faltan (o fueron bloqueadas) las imágenes ${labels.join(", ")}. Pido al Agent que las reformule suavizándolas y las repita (ronda ${round}/${maxRounds}).`);
     const retryText =
       `Las imágenes con identificador ${labels.map((l) => `[${l}]`).join(", ")} no se generaron ` +
       `(fallaron o fueron bloqueadas por las políticas de contenido). Reformula cada uno de esos ` +
       `prompts para que sea más seguro y aceptable, manteniendo la idea general de la escena, y ` +
       `vuelve a generarlos (exactamente UNA imagen por prompt). Renombra cada imagen resultante con su mismo identificador ` +
-      `exacto (por ejemplo, la reformulación de [${labels[0]}] debe llamarse ${labels[0]}).`;
+      `exacto (por ejemplo, la reformulación de [${labels[0]}] debe llamarse ${labels[0]}).` +
+      (round >= 2 ? ` ${buildSoftenNote("image", round + 1)}` : "");
     const r = await sendWithRateLimit(() => writePrompt(retryText), { maxPoints: CONFIG.maxAllowedPointsImages });
     if (r.type === "started") {
       await tryWait(() => $$(CONFIG.pendingTileTag).length === 0, waitMs, "que terminen las imágenes reintentadas");
@@ -534,8 +543,8 @@ async function phaseImages(cfg, isResume) {
     missing = missing.filter((n) => !present(n));
   }
   for (const n of missing) {
-    await setStep(n, "image", "failed", { error: "la imagen no se generó ni reformulando (probable bloqueo de contenido): hazla a mano en Flow y llámala " + pad3(n) });
-    log("error", `La imagen ${pad3(n)} no se generó tras 2 reformulaciones. El resto del lote sigue.`, { scene: n });
+    await setStep(n, "image", "failed", { error: `la imagen no se generó ni tras ${maxRounds} reformulaciones (bloqueo de contenido): hazla a mano en Flow y llámala ${pad3(n)}` });
+    log("error", `La imagen ${pad3(n)} no se generó tras ${maxRounds} reformulaciones. El resto del lote sigue.`, { scene: n });
   }
   if (!missing.length) log("ok", "Fase 1 terminada: todas las imágenes generadas y renombradas.");
 }
@@ -577,10 +586,17 @@ async function attachViaPlusMenu(label) {
   if (hit.count > 1) log("warn", `Hay ${hit.count} imágenes llamadas "${label}"; uso la más reciente (la primera de la lista).`);
   hit.el.scrollIntoView({ block: "center" });
   clickDeep(hit.el);
-  const pane = await tryWait(() => { const p = $(CONFIG.detailPaneSelector); return p && p.textContent.includes(label) ? p : null; }, 6000, `la vista previa de "${label}"`);
-  if (!pane) {
-    const p = $(CONFIG.detailPaneSelector);
-    throw new Error(p ? `la vista previa no es de "${label}" (dice: "${p.textContent.trim().slice(0, 40)}")` : "no apareció la vista previa de la imagen");
+  // La vista previa puede llevar el nombre en el texto o solo en atributos
+  // (aria-label, alt, title): en el Flow real el texto es solo "Añadir a petición".
+  const paneText = (p) => [p.textContent, ...$$("[aria-label],[alt],[title]", p).map((e) => `${e.getAttribute("aria-label") || ""} ${e.getAttribute("alt") || ""} ${e.getAttribute("title") || ""}`)].join(" ");
+  const pane = await tryWait(() => $(CONFIG.detailPaneSelector), 6000, "la vista previa");
+  if (!pane) throw new Error("no apareció la vista previa de la imagen");
+  await sleep(400);
+  const txt = paneText($(CONFIG.detailPaneSelector) || pane);
+  if (!txt.includes(label)) {
+    const other = (txt.match(/\b\d{3}\b/g) || []).filter((x) => x !== label);
+    if (other.length) throw new Error(`la vista previa es de "${other[0]}", no de "${label}"`);
+    log("info", `La vista previa no muestra el nombre; confío en el elemento pulsado ("${(hit.el.textContent || "").trim()}").`);
   }
   const addToPrompt = await tryWait(() => $(CONFIG.addToPromptButtonSelector), 5000, 'el botón "Añadir a petición"');
   if (!addToPrompt) throw new Error('no encuentro el botón "Añadir a petición"');
@@ -615,21 +631,36 @@ async function attachReferenceImage(n) {
 }
 
 // ============================================================ FASE 2A: VÍDEOS
-async function waitForSceneVideo(sendRes, maxWaitMs) {
+// Espera al vídeo de la escena. Preferencia: el tile que el Agent ha
+// RENOMBRADO con el nombre pedido (robusto aunque Flow redibuje el tile o
+// tarde en terminar). Si en 30 s desde que hay un vídeo nuevo terminado no
+// aparece el nombre, se usa ese vídeo nuevo (método anterior).
+async function waitForSceneVideo(sendRes, maxWaitMs, wantedName) {
   const assigned = batch.order.map((m) => batch.scenes[m].videoKey).filter(Boolean);
+  let freshReadySince = 0;
+  let lastInProgressNote = 0;
   const r = await tryWait(() => {
     const sig = detectNewSignals(sendRes.textBefore, agentPanelText());
     if (sig.policy) return { error: "policy" };
+    if (wantedName) {
+      const named = videoTilesByTitle(wantedName).filter(tileReady);
+      if (named.length) return { key: tileKey(named[0]), el: named[0], named: true, count: named.length };
+    }
     const fresh = newVideoTiles(sendRes.before).filter((t) => !assigned.includes(tileKey(t)));
     const bad = fresh.find((t) => /no se ha podido generar/i.test(t.textContent || ""));
     if (bad) return { error: "genError" };
     if (sig.genError && !fresh.length) return { error: "genError" };
-    if (fresh.length && $$(CONFIG.pendingTileTag).length <= sendRes.before.pending) {
-      const pick = pickNewVideoKey(fresh.map(tileKey), assigned);
-      const el = fresh.find((t) => tileKey(t) === pick.key);
-      return { key: pick.key, el, ambiguous: pick.ambiguous, count: fresh.length };
+    const ready = fresh.filter(tileReady);
+    if (fresh.length && !ready.length && Date.now() - lastInProgressNote > 60000) {
+      lastInProgressNote = Date.now();
+      log("info", `El vídeo aún se está procesando en Flow (${(fresh[0].textContent || "").match(/\d{1,3}\s?%/) || "sin %"})…`);
     }
-    return null;
+    if (!ready.length) { freshReadySince = 0; return null; }
+    if (!freshReadySince) freshReadySince = Date.now();
+    if (wantedName && Date.now() - freshReadySince < 30000) return null; // damos tiempo al renombrado
+    const pick = pickNewVideoKey(ready.map(tileKey), assigned);
+    const el = ready.find((t) => tileKey(t) === pick.key);
+    return { key: pick.key, el, ambiguous: pick.ambiguous, count: ready.length, named: false };
   }, maxWaitMs, "el vídeo nuevo");
   return r || { error: "timeout" };
 }
@@ -657,16 +688,20 @@ async function phaseVideos(cfg) {
       log("error", "No hay prompt de animación para esta escena en el kit.");
       continue;
     }
-    const prompt = ensureVideoDuration(raw, CONFIG.videoSeconds);
-    if (prompt !== raw) log("info", `Ajusto la duración del prompt a ${CONFIG.videoSeconds} s (de ella depende el coste: 6 s = 10 puntos).`);
+    const tileName = buildVideoTileName(cfg.prefix, n, cfg.batchFolder);
+    // Se pide al Agent que renombre el vídeo (como ya hace con las imágenes) para
+    // encontrarlo después por su nombre. No cambia la duración (ni el coste).
+    const prompt = ensureVideoDuration(raw, CONFIG.videoSeconds) + `\n\n(Cuando termine de generarse, cambia el nombre de este vídeo exactamente a: ${tileName})`;
+    if (ensureVideoDuration(raw, CONFIG.videoSeconds) !== raw) log("info", `Ajusto la duración del prompt a ${CONFIG.videoSeconds} s (de ella depende el coste: 6 s = 10 puntos).`);
 
     let lastError = null;
     let outcome = null;
-    for (let attempt = 1; attempt <= CONFIG.maxAttemptsPerScene && !outcome; attempt++) {
-      ui.setStatus(`Escena ${pad3(n)}: vídeo (intento ${attempt}/${CONFIG.maxAttemptsPerScene})`, "info");
+    const maxAttempts = Math.max(1, cfg.maxRetries || CONFIG.maxAttemptsPerScene);
+    for (let attempt = 1; attempt <= maxAttempts && !outcome; attempt++) {
+      ui.setStatus(`Escena ${pad3(n)}: vídeo (intento ${attempt}/${maxAttempts})`, "info");
       await setStep(n, "video", "running", { videoApproved: false, error: null });
-      const text = attempt === 1 ? prompt
-        : `${prompt}\n\n(El intento anterior de esta animación falló o fue bloqueado por contenido. Reformula esta descripción de movimiento de forma más segura, manteniendo la misma idea general, y genera igualmente.)`;
+      const text = attempt === 1 ? prompt : `${prompt}\n\n${buildSoftenNote("video", attempt)}`;
+      if (attempt > 1) log("info", `Reintento ${attempt}/${maxAttempts}: pido al Agent el mismo vídeo con el prompt suavizado.`);
       let res;
       try {
         const t0 = Date.now();
@@ -692,26 +727,27 @@ async function phaseVideos(cfg) {
         }
         if (res.type === "started") {
           log("info", `Generando el vídeo… (espero hasta ${Math.round(maxWaitMs / 60000)} min; con cola puede tardar)`);
-          const v = await waitForSceneVideo(res, maxWaitMs);
+          const v = await waitForSceneVideo(res, maxWaitMs, tileName);
           if (v.key) {
-            if (v.ambiguous) log("warn", `Aparecieron ${v.count} vídeos nuevos a la vez; asigno el primero a esta escena. Revisa que sea el correcto.`);
+            if (!v.named && v.ambiguous) log("warn", `Aparecieron ${v.count} vídeos nuevos terminados a la vez y el Agent no renombró ninguno como "${tileName}"; asigno el primero. Revisa que sea el correcto.`);
+            else if (!v.named) log("warn", `El Agent no renombró el vídeo como "${tileName}"; lo identifico por ser el vídeo nuevo.`);
             videoElByScene.set(n, v.el);
-            await setStep(n, "video", "done", { videoKey: v.key, error: null });
-            log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s.`);
+            await setStep(n, "video", "done", { videoKey: v.key, videoName: v.named ? tileName : null, error: null });
+            log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s${v.named ? ` y renombrado "${tileName}"` : ""}.`);
             outcome = "done";
           } else if (v.error === "timeout") {
             lastError = `el coste se aprobó pero el vídeo no apareció en ${Math.round(maxWaitMs / 60000)} min`;
             outcome = "review";
           } else {
             lastError = v.error === "policy" ? "Flow lo bloqueó por su política de contenido" : "Flow dice que no se ha podido generar (no se cobra)";
-            log("warn", `${lastError}.${attempt < CONFIG.maxAttemptsPerScene ? " Reintento pidiendo que reformule." : ""}`);
+            log("warn", `${lastError}.${attempt < maxAttempts ? " Reintento suavizando el prompt." : ""}`);
           }
         } else if (res.type === "approvedNoStart") {
           lastError = res.error || "el coste se aprobó pero no empezó ninguna generación";
           outcome = "review";
         } else {
           lastError = res.error || ({ policy: "bloqueado por la política de contenido", genError: "Flow no pudo generarlo", cancelled: "el Agent canceló la generación", noStart: "no se llegó a enviar" }[res.type] || res.type);
-          log("warn", `No salió: ${lastError}.${attempt < CONFIG.maxAttemptsPerScene ? " Reintento." : ""}`);
+          log("warn", `No salió: ${lastError}.${attempt < maxAttempts ? " Reintento." : ""}`);
         }
       } catch (e) {
         if (e instanceof StopError || e instanceof NoPointsError || e instanceof CostError) throw e;
@@ -728,7 +764,7 @@ async function phaseVideos(cfg) {
     } else if (outcome !== "done") {
       await setStep(n, "video", "failed", { error: lastError || "no se pudo generar" });
       await setStep(n, "download", "skipped");
-      log("error", `No se pudo generar el vídeo tras ${CONFIG.maxAttemptsPerScene} intentos: ${lastError}. Sigo con la siguiente escena.`);
+      log("error", `No se pudo generar el vídeo tras ${maxAttempts} intentos: ${lastError}. Sigo con la siguiente escena.`);
     }
     await sleep(1500);
   }
@@ -737,6 +773,9 @@ async function phaseVideos(cfg) {
 
 // ======================================================= FASE 2B: DESCARGAS
 async function findVideoTileForScene(n) {
+  const name = batch.scenes[n].videoName || buildVideoTileName(batch.config.prefix, n, batch.config.batchFolder);
+  const byName = await findWithScroll(() => videoTilesByTitle(name).find(tileReady) || null, CONFIG.videoTileTag);
+  if (byName) return byName;
   const el = videoElByScene.get(n);
   if (el && el.isConnected) return el;
   const key = batch.scenes[n].videoKey;
@@ -904,7 +943,9 @@ function reasonOf(s) {
 
 async function finishRun(label) {
   const sum = summarizeBatch(batch);
-  const problems = [...sum.failed, ...sum.review, ...sum.nopoints];
+  const unfinished = batch.status !== "done" ? batch.order.filter((n) => !sum.done.includes(n) && ![...sum.failed, ...sum.review, ...sum.nopoints].includes(n)) : [];
+  for (const n of unfinished) if (!batch.scenes[n].error) batch.scenes[n].error = `sin terminar (${label})`;
+  const problems = [...sum.failed, ...sum.review, ...sum.nopoints, ...unfinished];
   const total = batch.order.length;
   const where = batch.config.destMode === "folder" ? `carpeta elegida/${batch.config.batchFolder}` : `Descargas/MundoFutFlow/${batch.config.batchFolder}`;
   ctxScene = null;
@@ -983,9 +1024,13 @@ async function runBatch(cfg, resumeState) {
   log("info", `${isResume ? "REANUDO" : "EMPIEZA"} el lote en ${ACC}: escenas ${batch.order.map(pad3).join(", ")} · modo ${cfg.genMode} · ${cfg.resolution} · nombres ${buildVideoFilename(cfg.nameFormat, cfg.prefix, batch.order[0] || 1)} · carpeta ${cfg.batchFolder} · pestaña ${document.visibilityState === "visible" ? "visible" : "OCULTA"}.`);
   if (document.visibilityState !== "visible") log("info", "La pestaña de Flow está en segundo plano: sigo trabajando igual (la extensión la mantiene despierta). Puedes seguir usando otras pestañas.");
   let label = "completo";
+  setBackgroundMode(true);
   try {
-    const box = await tryWait(() => getPromptBox(), 30000, "la caja de prompt de Flow");
-    if (!box) throw new Error("no encuentro la caja de prompt de Flow: ¿estás dentro de un proyecto?");
+    const box = await tryWait(() => getPromptBox(), 90000, "la caja de prompt de Flow");
+    if (!box) {
+      const shown = (document.body ? document.body.innerText : "").replace(/\s+/g, " ").trim().slice(0, 140);
+      throw new Error(`no encuentro la caja de prompt de Flow tras 90 s (pestaña ${document.visibilityState}; URL ${location.pathname}; la página muestra: "${shown || "nada"}")`);
+    }
     if (["paired", "imagesOnly"].includes(cfg.genMode)) await phaseImages(cfg, isResume);
     if (cfg.genMode === "downloadTest") await pickExistingVideos();
     let halt = null;
@@ -1019,6 +1064,7 @@ async function runBatch(cfg, resumeState) {
       console.error(e);
     }
   } finally {
+    setBackgroundMode(false);
     running = false;
     await closeOverlays().catch(() => {});
     for (const n of batch.order) for (const step of ["image", "video", "download"]) if (batch.scenes[n][step] === "running") batch.scenes[n][step] = step === "video" && batch.scenes[n].videoApproved ? "review" : "pending";
@@ -1059,7 +1105,7 @@ async function fetchBlobToOffscreen({ url, jobId, relPath, mime }) {
 // ============================================================== MENSAJES
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.target === "offscreen") return false;
-  if (msg.type === "TICK") { wakeAll(); return false; }
+  if (msg.type === "TICK") { wakeAll(); if (running) document.dispatchEvent(new CustomEvent("fbr-tick")); return false; }
   if (msg.type === "START_RUN") {
     if (running) { sendResponse({ ok: false, error: "ya hay un lote en marcha en esta pestaña" }); return false; }
     runBatch(msg, null);

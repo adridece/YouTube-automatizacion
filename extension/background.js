@@ -258,6 +258,18 @@ async function launchStep(step) {
     blog("warn", `La pestaña de ${step.accountKey} no está dentro de un proyecto de Flow (${tab.url}). Abre un proyecto (mejor uno nuevo y vacío) antes de lanzar.`, { acc: step.accountKey });
   }
   // Nunca se activa la pestaña de Flow: el usuario sigue usando el navegador.
+  // Si Chrome la tiene "dormida" (descartada o sin cargar, p. ej. abierta en
+  // segundo plano al arrancar), se recarga y se espera a que cargue.
+  if (tab.discarded || tab.status === "unloaded") {
+    blog("warn", `La pestaña de ${step.accountKey} estaba dormida (Chrome la había descartado). La recargo antes de empezar.`, { acc: step.accountKey });
+    await chrome.tabs.reload(tab.id).catch(() => {});
+    for (let i = 0; i < 60; i++) {
+      const t = await chrome.tabs.get(tab.id).catch(() => null);
+      if (t && t.status === "complete" && !t.discarded) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
   try {
     const r = await sendToTab(tab.id, { type: "START_RUN", ...step.run });
     if (r && r.ok === false) {
