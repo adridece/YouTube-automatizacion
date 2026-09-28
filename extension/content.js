@@ -315,20 +315,29 @@ function normalizeUrlKey(u) {
 // posición en la cuadrícula, que NO es cronológica). [SUPUESTO] qué atributos
 // trae: lo muestra tools/flow-diagnostic.js.
 function tileKey(tile) {
-  for (const a of ["data-id", "data-media-id", "data-asset-id", "data-key", "id"]) {
+  for (const a of ["data-id", "data-media-id", "data-asset-id", "data-key", "data-uuid", "id"]) {
     const v = tile.getAttribute(a);
     if (v) return `${a}:${v}`;
   }
+  // v2.8: Flow puede SUSTITUIR los tiles (nodos nuevos) al terminar otra
+  // generación; la clave tiene que salir del CONTENIDO para seguir valiendo.
+  const idEl = tile.querySelector("[data-id],[data-media-id],[data-asset-id],[data-key],[data-uuid]");
+  if (idEl) for (const a of ["data-id", "data-media-id", "data-asset-id", "data-key", "data-uuid"]) { const v = idEl.getAttribute(a); if (v) return `in-${a}:${v}`; }
   const v = tile.querySelector("video");
-  const vs = v && (v.getAttribute("src") || (v.querySelector("source") || {}).src || v.getAttribute("poster"));
-  if (vs) return `src:${normalizeUrlKey(vs)}`;
-  const img = tile.querySelector("img");
-  if (img && img.getAttribute("src")) return `img:${normalizeUrlKey(img.getAttribute("src"))}`;
+  const vs = v && (v.getAttribute("src") || (v.querySelector("source") || { getAttribute: () => null }).getAttribute("src") || v.getAttribute("poster"));
+  if (vs && !vs.startsWith("blob:")) return `src:${normalizeUrlKey(vs)}`;
+  const img = tile.querySelector("img[src]");
+  if (img && !img.getAttribute("src").startsWith("blob:")) return `img:${normalizeUrlKey(img.getAttribute("src"))}`;
   const a = tile.querySelector("a[href]");
   if (a) return `a:${a.getAttribute("href")}`;
+  const bg = [tile, ...$$("*", tile)].map((e) => (e.getAttribute("style") || "").match(/url\(["']?([^"')]+)/)).find(Boolean);
+  if (bg && !bg[1].startsWith("blob:")) return `bg:${normalizeUrlKey(bg[1])}`;
+  if (vs) return `src:${vs}`; // blob: vale mientras el tile no se sustituya
   if (!tile.__fbrSeq) tile.__fbrSeq = `seq:${Math.random().toString(36).slice(2, 10)}`;
   return tile.__fbrSeq;
 }
+// ¿Las claves son fiables (salen del contenido) o provisionales (seq/blob)?
+function keyIsStable(k) { return !!k && !/^seq:|^src:blob:/.test(k); }
 function tileTitle(tile) {
   const t = tile.querySelector(CONFIG.tileTitleSelector);
   return t ? t.textContent.trim() : "";
@@ -865,8 +874,31 @@ async function attachReferenceImage(n) {
 //    ESE vídeo (diferencia de tiles antes/después; nada de nombres);
 //  - se DESCARGA EN ESE MISMO MOMENTO con su nombre <prefijo>_<NNN>.mp4,
 //    antes de pedir el siguiente: nunca hay que buscarlo luego entre todos.
+// PRUEBA REAL v2.7: el vídeo se daba por "generado" a los 3 s y la descarga
+// fallaba ("no aparece Descargar" y luego "no encuentro el tile"): mientras
+// Flow genera, aparece en la cuadrícula un tile PROVISIONAL (sin "%") que al
+// terminar se sustituye por el definitivo. Ahora un vídeo solo cuenta como
+// terminado cuando:
+//   1) ya no queda el flow-pending-tile de esta petición ([V] "terminó" =
+//      no queda ningún pending, igual que en las imágenes),
+//   2) el tile nuevo no está dentro de un pending ni muestra progreso,
+//   3) sigue siendo el mismo tile durante 5 s (20 s si aún no tiene fuente
+//      de vídeo, por si es el provisional).
+function videoSrcOf(tile) {
+  const v = tile && tile.querySelector("video");
+  if (!v) return null;
+  const list = [v.currentSrc, v.src, ...$$("source", v).map((x) => x.src)].filter(Boolean);
+  return list.find((u) => /^(https:|blob:)/.test(u)) || null;
+}
+function isErrorTile(t) { return /no se ha podido generar/i.test(t.textContent || ""); }
+function freshVideoTiles(beforeKeys, excludeKeys) {
+  const before = new Set(beforeKeys || []);
+  const ex = new Set(excludeKeys || []);
+  return $$(CONFIG.videoTileTag).filter((t) => !t.closest(CONFIG.pendingTileTag) && !before.has(tileKey(t)) && !ex.has(tileKey(t)));
+}
 async function waitForSceneVideo(sendRes, maxWaitMs) {
   const assigned = () => batch.order.map((m) => batch.scenes[m].videoKey).filter(Boolean);
+  const basePending = Math.max(sendRes.before.pending, ignoredPending);
   let lastInProgressNote = 0;
   let readyKey = null;
   let readySince = 0;
@@ -874,29 +906,34 @@ async function waitForSceneVideo(sendRes, maxWaitMs) {
     rejectStrayCostDialogs("mientras se generaba el vídeo");
     const sig = detectNewSignals(sendRes.textBefore, agentPanelText());
     if (sig.policy) return { error: "policy" };
-    const taken = assigned();
-    const fresh = newVideoTiles(sendRes.before).filter((t) => !taken.includes(tileKey(t)));
-    if (fresh.find((t) => /no se ha podido generar/i.test(t.textContent || ""))) return { error: "genError" };
-    if (sig.genError && !fresh.length) return { error: "genError" };
-    const ready = fresh.filter(tileReady);
-    if (fresh.length && !ready.length && Date.now() - lastInProgressNote > 60000) {
-      lastInProgressNote = Date.now();
-      log("info", `El vídeo aún se está procesando en Flow (${(fresh[0].textContent || "").match(/\d{1,3}\s?%/) || "sin %"})…`);
+    const fresh = freshVideoTiles(sendRes.before.videoKeys, assigned());
+    if (fresh.find(isErrorTile)) return { error: "genError" };
+    if (sig.genError && !fresh.length && $$(CONFIG.pendingTileTag).length <= basePending) return { error: "genError" };
+    const generating = $$(CONFIG.pendingTileTag).length > basePending || fresh.some((t) => !tileReady(t));
+    if (generating) {
+      readyKey = null;
+      if (Date.now() - lastInProgressNote > 60000) {
+        lastInProgressNote = Date.now();
+        const pct = fresh.map((t) => (t.textContent || "").match(/\d{1,3}\s?%/)).find(Boolean);
+        log("info", `El vídeo se está generando en Flow${pct ? ` (${pct[0]})` : ""}…`);
+      }
+      return null;
     }
+    const ready = fresh.filter((t) => tileReady(t) && !isErrorTile(t));
     if (!ready.length) { readyKey = null; return null; }
-    const pick = pickNewVideoKey(ready.map(tileKey), taken);
-    // Se exige que el mismo tile siga "terminado" 3 s (no coger uno que
-    // Flow aún está pintando o que va a sustituir por otro).
-    if (pick.key !== readyKey) { readyKey = pick.key; readySince = Date.now(); return null; }
-    if (Date.now() - readySince < 3000) return null;
+    const pick = pickNewVideoKey(ready.map(tileKey), []);
     const el = ready.find((t) => tileKey(t) === pick.key);
-    return el ? { key: pick.key, el, ambiguous: pick.ambiguous, count: ready.length } : null;
+    if (!el) return null;
+    if (pick.key !== readyKey) { readyKey = pick.key; readySince = Date.now(); return null; }
+    const need = videoSrcOf(el) ? 5000 : 20000;
+    if (Date.now() - readySince < need) return null;
+    return { key: pick.key, el, ambiguous: pick.ambiguous, count: ready.length };
   };
   let r = await tryWait(cond, maxWaitMs, "el vídeo nuevo");
   // Si se acaba la espera pero Flow sigue visiblemente generando (cola), se
   // espera más en vez de dar el vídeo por perdido.
   for (let ext = 1; !r && ext <= 2; ext++) {
-    const busy = $$(CONFIG.pendingTileTag).length > 0 || newVideoTiles(sendRes.before).some((t) => !tileReady(t));
+    const busy = $$(CONFIG.pendingTileTag).length > basePending || freshVideoTiles(sendRes.before.videoKeys, assigned()).some((t) => !tileReady(t));
     if (!busy) break;
     log("info", `Han pasado ${Math.round((maxWaitMs * ext) / 60000)} min y Flow sigue generando el vídeo (cola): espero ${Math.round(maxWaitMs / 60000)} min más (${ext}/2).`);
     r = await tryWait(cond, maxWaitMs, "el vídeo nuevo (espera ampliada)");
@@ -1014,13 +1051,19 @@ async function processSceneVideo(n, cfg, maxWaitMs, pass) {
         log("error", haltAfterScene + ".");
       }
       if (res.type === "started") {
+        // "Ventana" de esta escena: los vídeos que ya había al enviarla. Con
+        // ella se puede volver a encontrar SU vídeo aunque Flow redibuje el tile.
+        s.beforeVideoKeys = res.before.videoKeys;
+        s.sentAt = Date.now();
+        await saveBatch();
         log("info", `Generando el vídeo… (espero hasta ${Math.round(maxWaitMs / 60000)} min, más si Flow sigue en cola)`);
         const v = await waitForSceneVideo(res, maxWaitMs);
         if (v.key) {
           if (v.ambiguous) log("warn", `Aparecieron ${v.count} vídeos nuevos terminados a la vez; asigno a esta escena el más reciente. Revisa que sea el correcto.`);
           videoElByScene.set(n, v.el);
           await setStep(n, "video", "done", { videoKey: v.key, error: null, failKind: null });
-          log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s.`);
+          log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s${videoSrcOf(v.el) ? "" : " (el tile aún no muestra su fuente de vídeo)"}.`);
+          if (!keyIsStable(v.key)) log("info", `Aviso técnico: el tile de este vídeo no trae un identificador estable (${v.key.split(":")[0]}); lo descargo ya para no perderlo.`);
           outcome = "done";
         } else if (v.error === "timeout") {
           lastError = `el coste se aprobó pero el vídeo no apareció en ${Math.round((Date.now() - t0) / 60000)} min`;
@@ -1136,7 +1179,7 @@ async function resolveReviewScenes(cfg) {
     await sleep(3000);
   }
   const taken = new Set(batch.order.map((m) => batch.scenes[m].videoKey).filter(Boolean));
-  const orphans = $$(CONFIG.videoTileTag).filter((t) => tileReady(t) && !/no se ha podido generar/i.test(t.textContent || "") && !batch.startVideoKeys.includes(tileKey(t)) && !taken.has(tileKey(t)));
+  const orphans = $$(CONFIG.videoTileTag).filter((t) => !t.closest(CONFIG.pendingTileTag) && tileReady(t) && !isErrorTile(t) && !batch.startVideoKeys.includes(tileKey(t)) && !taken.has(tileKey(t)));
   if (orphans.length !== review.length) {
     if (orphans.length) log("warn", `Hay ${orphans.length} vídeo(s) nuevo(s) sin escena y ${review.length} escena(s) a revisar: no los asigno solo para no cruzarlos. Revisa en Flow.`);
     return;
@@ -1155,12 +1198,50 @@ async function resolveReviewScenes(cfg) {
 }
 
 // ======================================================= FASE 2B: DESCARGAS
+// Busca el tile del vídeo de una escena JUSTO antes de descargarlo (nunca se
+// fía de un elemento guardado que Flow haya podido sustituir):
+//  1) el elemento guardado, si sigue en la página y terminado;
+//  2) un tile con la misma clave;
+//  3) por su "ventana": vídeos terminados que NO existían al enviar esta
+//     escena, que no son de otra escena y (si ya se envió la siguiente) que
+//     SÍ existían al enviar la siguiente.
+function sceneVideoCandidates(n) {
+  const s = batch.scenes[n];
+  const others = batch.order.filter((m) => m !== n).map((m) => batch.scenes[m].videoKey).filter(Boolean);
+  let list = freshVideoTiles(s.beforeVideoKeys || batch.startVideoKeys || [], others).filter((t) => tileReady(t) && !isErrorTile(t));
+  const next = batch.order.map((m) => batch.scenes[m]).filter((x) => x !== s && x.sentAt && s.sentAt && x.sentAt > s.sentAt && Array.isArray(x.beforeVideoKeys)).sort((x, y) => x.sentAt - y.sentAt)[0];
+  // Con claves provisionales (Flow no da ningún identificador estable), un
+  // tile sustituido parece "nuevo": entonces solo vale el más reciente (Flow
+  // pone los últimos primero) y solo justo después de generarlo.
+  if ((s.beforeVideoKeys || []).some((k) => !keyIsStable(k)) || (s.videoKey && !keyIsStable(s.videoKey))) {
+    // Si ya se envió otra escena después, "el más reciente" sería el suyo: no se adivina.
+    if (next) return [];
+    return list.length ? [list[0]] : [];
+  }
+  if (next) {
+    const nb = new Set(next.beforeVideoKeys);
+    const inWindow = list.filter((t) => nb.has(tileKey(t)));
+    if (inWindow.length) list = inWindow;
+  }
+  return list;
+}
 async function findVideoTileForScene(n) {
+  const s = batch.scenes[n];
   const el = videoElByScene.get(n);
-  if (el && el.isConnected) return el;
-  const key = batch.scenes[n].videoKey;
-  if (!key) return null;
-  return findWithScroll(() => $$(CONFIG.videoTileTag).find((t) => tileKey(t) === key) || null, CONFIG.videoTileTag);
+  if (el && el.isConnected && !el.closest(CONFIG.pendingTileTag) && tileReady(el)) return el;
+  const key = s.videoKey;
+  if (key) {
+    const byKey = $$(CONFIG.videoTileTag).find((t) => tileKey(t) === key && tileReady(t));
+    if (byKey) { videoElByScene.set(n, byKey); return byKey; }
+  }
+  const cands = sceneVideoCandidates(n);
+  if (!cands.length) return findWithScroll(() => sceneVideoCandidates(n)[0] || null, CONFIG.videoTileTag);
+  if (cands.length > 1) log("warn", `Hay ${cands.length} vídeos posibles para la escena ${pad3(n)}; uso el más reciente.`);
+  else log("info", "Flow sustituyó el tile del vídeo; lo he vuelto a encontrar (es el vídeo nuevo de esta escena).");
+  videoElByScene.set(n, cands[0]);
+  s.videoKey = tileKey(cands[0]);
+  await saveBatch();
+  return cands[0];
 }
 
 async function openDownloadMenu(tile, kind, resolution) {
@@ -1184,15 +1265,13 @@ async function openDownloadMenu(tile, kind, resolution) {
   throw new Error(`no encuentro ninguna resolución (${options.join(", ")}) en el submenú "Descargar"`);
 }
 
-async function downloadOne(n, tile, kind, cfg, mode) {
-  const ext = kind === "video" ? "mp4" : "png";
-  const relPath = `${cfg.batchFolder}/${buildVideoFilename(cfg.nameFormat, cfg.prefix, n, ext)}`;
-  let arm;
+// Turno de descarga (una a la vez en toda la extensión).
+async function armDownload(n, relPath, mode) {
   const tq = Date.now();
   for (let waitedLogged = false; ; ) {
     throwIfStopped();
-    arm = await send({ type: "DL_ARM", acc: ACC, scene: n, relPath, mode });
-    if (arm && arm.ok) break;
+    const arm = await send({ type: "DL_ARM", acc: ACC, scene: n, relPath, mode });
+    if (arm && arm.ok) return arm;
     if (arm && arm.busy) {
       if (!waitedLogged) { log("info", "La otra cuenta está descargando; espero mi turno (las descargas van de una en una)."); waitedLogged = true; }
       if (Date.now() - tq > 15 * 60000) throw new Error("llevo 15 min esperando turno para descargar");
@@ -1201,10 +1280,15 @@ async function downloadOne(n, tile, kind, cfg, mode) {
     }
     throw new Error("el service worker de la extensión no responde (recarga la extensión y pulsa F5)");
   }
+}
+function sceneRelPath(n, kind, cfg) {
+  return `${cfg.batchFolder}/${buildVideoFilename(cfg.nameFormat, cfg.prefix, n, kind === "video" ? "mp4" : "png")}`;
+}
+// Espera a que el gestor de descargas (background.js) termine el trabajo.
+async function awaitDownloadJob(arm, start) {
   let finished = false;
   try {
-    const res = await openDownloadMenu(tile, kind, cfg.resolution);
-    log("info", `He pedido la descarga (${res}). Espero a que Chrome la registre (Flow prepara el archivo; 1080p puede tardar)…`);
+    await start();
     const t0 = Date.now();
     let createdAt = null;
     let lastNote = t0;
@@ -1213,10 +1297,7 @@ async function downloadOne(n, tile, kind, cfg, mode) {
       throwIfStopped();
       const st = await send({ type: "DL_STATUS", jobId: arm.jobId });
       if (!st || st.status === "gone") throw new Error("el gestor de descargas perdió la pista de esta descarga");
-      if (st.status === "done") {
-        finished = true;
-        return st.result;
-      }
+      if (st.status === "done") { finished = true; return st.result; }
       if (st.status === "failed") { finished = true; throw new Error(st.result && st.result.error ? st.result.error : "la descarga falló"); }
       if (st.status !== "armed" && !createdAt) createdAt = Date.now();
       if (st.promptWarned && !promptNoted) {
@@ -1229,7 +1310,7 @@ async function downloadOne(n, tile, kind, cfg, mode) {
         throw err;
       }
       if (!createdAt && Date.now() - t0 > CONFIG.download.createdTimeoutMs) {
-        throw new Error(`Chrome no registró ninguna descarga en ${CONFIG.download.createdTimeoutMs / 1000} s. Causas posibles: (1) Flow no terminó de preparar el archivo; (2) el clic en la resolución no hizo efecto; (3) Chrome retiene la descarga con un aviso de "descargar varios archivos" (la extensión ya da ese permiso a flow.google.com; compruébalo en chrome://settings/content/automaticDownloads)${visibilityNote()}`);
+        throw new Error(`Chrome no registró ninguna descarga en ${CONFIG.download.createdTimeoutMs / 1000} s (Flow no entregó el archivo)${visibilityNote()}`);
       }
       if (createdAt && Date.now() - createdAt > CONFIG.download.completeTimeoutMs) throw new Error(`la descarga empezó pero no terminó en ${CONFIG.download.completeTimeoutMs / 1000} s`);
       if (Date.now() - lastNote > 30000) {
@@ -1242,7 +1323,26 @@ async function downloadOne(n, tile, kind, cfg, mode) {
     if (!finished) send({ type: "DL_DISARM", jobId: arm.jobId });
   }
 }
-
+// Método 1 [V en v2.1]: clic derecho → Descargar → resolución.
+async function downloadViaMenu(n, tile, kind, cfg, mode) {
+  const arm = await armDownload(n, sceneRelPath(n, kind, cfg), mode);
+  return awaitDownloadJob(arm, async () => {
+    const res = await openDownloadMenu(tile, kind, cfg.resolution);
+    log("info", `He pedido la descarga (${res}). Espero a que Chrome la registre (Flow prepara el archivo; 1080p puede tardar)…`);
+  });
+}
+// Método 2 (plan B): guardar directamente la FUENTE del vídeo que muestra el
+// tile (<video src>), sin menú. Es el vídeo en su tamaño original.
+async function downloadViaSource(n, tile, cfg, mode) {
+  const url = videoSrcOf(tile);
+  if (!url) throw new Error("el tile no tiene fuente de vídeo que se pueda guardar directamente");
+  const arm = await armDownload(n, sceneRelPath(n, "video", cfg), mode);
+  return awaitDownloadJob(arm, async () => {
+    log("info", `Plan B: guardo directamente la fuente del vídeo (${url.startsWith("blob:") ? "blob" : "https"}), sin pasar por el menú de Flow.`);
+    const r = await send({ type: "DL_DIRECT", jobId: arm.jobId, url, mime: "video/mp4" });
+    if (!r || !r.ok) throw new Error((r && r.error) || "el gestor de descargas no aceptó la descarga directa");
+  });
+}
 
 // Destino de las descargas: se decide una vez por lote (y se cambia solo a
 // "Descargas de Chrome" si la carpeta elegida deja de tener permiso).
@@ -1280,18 +1380,29 @@ async function downloadScene(n, kind, cfg) {
     ui.setStatus(`Escena ${pad3(n)}: descargando`, "info");
     await setStep(n, "download", "running");
     let lastErr = null;
-    for (let attempt = 1; attempt <= CONFIG.download.attempts; attempt++) {
+    // Plan de intentos: menú (resolución elegida) → menú → fuente directa →
+    // menú a 720p → fuente directa. Entre intentos se espera cada vez más y
+    // el tile se vuelve a buscar desde cero.
+    const plan = kind === "video" ? ["menu", "menu", "source", "menu720", "source"] : ["menu", "menu", "menu"];
+    const waits = [0, 8000, 15000, 25000, 30000];
+    for (let i = 0; i < plan.length; i++) {
+      const how = plan[i];
       try {
-        const tile = kind === "video" ? await findVideoTileForScene(n) : await findWithScroll(() => findImageTileByLabel(pad3(n)), CONFIG.imageTileTag);
-        if (!tile) throw new Error(kind === "video" ? "no encuentro el tile del vídeo de esta escena (¿se recargó la página?)" : "no encuentro la imagen");
-        // Último intento: si Flow no llegó a entregar el 1080p (lo "mejora" antes
-        // de descargar), se pide el 720p original para que al menos quede el vídeo.
-        let useCfg = cfg;
-        if (kind === "video" && attempt === CONFIG.download.attempts && cfg.resolution !== "720p" && /no registró ninguna descarga|no terminó/.test(lastErr || "")) {
-          useCfg = { ...cfg, resolution: "720p" };
-          log("warn", "Flow no entregó el 1080p en los intentos anteriores: pido la versión 720p (tamaño original) para no quedarme sin el vídeo.");
+        if (waits[i]) await sleep(waits[i]);
+        throwIfStopped();
+        // Nunca descargar mientras Flow aún genera (el tile podría ser el provisional).
+        if (kind === "video" && $$(CONFIG.pendingTileTag).length > ignoredPending) {
+          await tryWait(() => $$(CONFIG.pendingTileTag).length <= ignoredPending, 5 * 60000, "que Flow termine de generar antes de descargar");
         }
-        const r = await downloadOne(n, tile, kind, useCfg, destModeCache);
+        const tile = kind === "video" ? await findVideoTileForScene(n) : await findWithScroll(() => findImageTileByLabel(pad3(n)), CONFIG.imageTileTag);
+        if (!tile) throw new Error(kind === "video" ? "no encuentro el vídeo de esta escena en la cuadrícula" : "no encuentro la imagen");
+        let r;
+        if (how === "source") r = await downloadViaSource(n, tile, cfg, destModeCache);
+        else {
+          const useCfg = how === "menu720" && cfg.resolution !== "720p" ? { ...cfg, resolution: "720p" } : cfg;
+          if (useCfg !== cfg) log("warn", "Pido la versión 720p (tamaño original) por si el 1080p es lo que falla.");
+          r = await downloadViaMenu(n, tile, kind, useCfg, destModeCache);
+        }
         if (!r.nameOk) {
           await setStep(n, "download", "review", { file: r.path, error: `se guardó con otro nombre: ${r.path}` });
           log("error", `Guardado pero con otro nombre: ${r.path}.`);
@@ -1309,9 +1420,8 @@ async function downloadScene(n, kind, cfg) {
           log("error", `No puedo escribir en la carpeta elegida (${e.message}). Paso a guardar en Descargas/MundoFutFlow/${cfg.batchFolder}/ (si tienes "Preguntar dónde guardar" activado, Chrome preguntará).`);
           send({ type: "NOTIFY", title: "Sin permiso en la carpeta elegida", message: "Guardo en Descargas/MundoFutFlow. Abre el panel de la extensión y pulsa «Conceder acceso» para la próxima vez.", sticky: true });
         }
-        log("warn", `Descarga fallida (intento ${attempt}/${CONFIG.download.attempts}): ${e.message}`);
+        log("warn", `Descarga fallida (intento ${i + 1}/${plan.length}, ${how === "source" ? "fuente directa" : "menú"}): ${e.message}`);
         if (e.noRetry) break;
-        if (attempt < CONFIG.download.attempts) await sleep(5000);
       }
     }
     await setStep(n, "download", "failed", { error: `no se pudo descargar: ${lastErr}` });

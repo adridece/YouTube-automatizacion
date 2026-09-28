@@ -17,6 +17,9 @@
   wrongRename=1 (el Agent pone a cada vídeo nuevo un nombre EQUIVOCADO, como en la prueba real v2.6),
   shuffle=1 (los tiles nuevos aparecen en posiciones al azar de la cuadrícula),
   brokenUntilReload=1 (el "+" y "Animar" no funcionan hasta que se recarga la página una vez).
+  placeholderTile=1 (PRUEBA REAL v2.7: mientras se genera hay además un flow-video-tile PROVISIONAL sin "%" ni vídeo
+    y sin "Descargar"; al terminar se sustituye por el definitivo y Flow redibuja todos los tiles de vídeo),
+  noMenuDownload=1 (el menú de los vídeos no tiene "Descargar": solo sirve la descarga directa de la fuente).
   Cada vídeo generado "sabe" de qué escena es (la imagen adjunta) y su descarga pesa 350000 + nº de escena
   bytes: así la prueba comprueba que cada archivo es el vídeo CORRECTO.
 -->
@@ -197,9 +200,13 @@ function startVideo(text, label) {
       sessionStorage.setItem("mockPendingVideo", "1");
       sessionStorage.setItem("mockPendingLabel", label || "");
       const p = addTile("flow-pending-tile");
+      const ph = P.get("placeholderTile") ? addTile("flow-video-tile", "Animate", "/media/thumb.png") : null;
+      if (ph) { ph.querySelector("video").remove(); const i = document.createElement("img"); i.setAttribute("src", "/media/thumb.png"); ph.prepend(i); ph.dataset.placeholder = "1"; }
       const wantName = (text.match(/cambia el nombre de este vídeo exactamente a: (\S+)\)/) || [])[1];
       setTimeout(() => {
         p.remove();
+        if (ph) ph.remove();
+        if (ph) setTimeout(rerenderVideos, 400); // SIM: Flow redibuja la cuadrícula (tiles NUEVOS, mismos vídeos)
         if (P.get("policyVideo") && videoSends <= +P.get("policyVideo")) { say("Esta generación de vídeo fue bloqueada por nuestras políticas de seguridad. No se te ha cobrado."); sessionStorage.setItem("mockPendingVideo", "0"); return; }
         if (!P.get("hiddenStall")) { sessionStorage.setItem("mockPendingVideo", "0"); finalizeVideo(wantName, label); return; }
         // SIM del problema real: se queda "100%" y solo termina con la página
@@ -213,6 +220,13 @@ function startVideo(text, label) {
   }
 }
 
+function rerenderVideos() {
+  for (const t of [...grid.querySelectorAll("flow-video-tile")]) {
+    const c = t.cloneNode(true);
+    t.replaceWith(c);
+    const a = assets.find((x) => x.tile === t); if (a) a.tile = c;
+  }
+}
 function finalizeVideo(wantName, label) {
   const t = addTile("flow-video-tile", "Animate " + uid(), `/media/${uid()}${label ? "-s" + label : ""}.mp4`);
   if (P.get("wrongRename")) setTimeout(() => { t.querySelector(".footer-title").textContent = "mundofut_001_0000"; }, 1000);
@@ -278,7 +292,7 @@ grid.addEventListener("contextmenu", (e) => {
   closeOverlay();
   const menu = document.createElement("div"); menu.className = "ctx"; menu.style.left = e.clientX + "px"; menu.style.top = e.clientY + "px";
   const isVideo = tile.tagName === "FLOW-VIDEO-TILE";
-  const items = isVideo ? ["Añadir a la petición", "downloadDescargar", "Cambiar nombre"] : ["Animar", "Añadir a la petición", "downloadDescargar"];
+  const items = isVideo ? (tile.dataset.placeholder || P.get("noMenuDownload") ? ["Añadir a la petición", "Cambiar nombre"] : ["Añadir a la petición", "downloadDescargar", "Cambiar nombre"]) : ["Animar", "Añadir a la petición", "downloadDescargar"];
   menu.innerHTML = items.map((t) => `<flow-menu-item role="menuitem">${t}</flow-menu-item>`).join("");
   overlay.appendChild(menu);
   menu.querySelectorAll("flow-menu-item").forEach((mi) => mi.addEventListener("click", () => {

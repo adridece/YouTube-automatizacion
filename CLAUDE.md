@@ -42,7 +42,12 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (28 sep 2026 — v2.7.0, "Cerezium Autopilot")
+## Estado actual (28 sep 2026 — v2.8.0, "Cerezium Autopilot")
+**Prueba real v2.7: TODO funcionó (imágenes, adjuntar, coste 10, aprobar, vídeos) salvo las descargas** (BUG_HISTORY #67: se tomaba
+un tile provisional por el vídeo terminado; Flow lo sustituye al terminar). v2.8: espera a que termine de verdad, re-busca el tile
+antes de cada intento, clave por contenido, y plan B de descarga directa de la fuente del vídeo. SIN VERIFICAR en real.
+
+### v2.7.0
 v2.7 (tras la prueba real de la v2.6: el Agent renombra mal los vídeos → descargas cruzadas; un fallo en la cuenta 2 no se
 resolvió solo): **cada vídeo se descarga nada más generarse** (identificado por diferencia de tiles, nunca por nombre; nunca dos
 vídeos generándose a la vez); se verifica que la imagen quedó adjunta antes de enviar; **segunda vuelta automática** de las escenas

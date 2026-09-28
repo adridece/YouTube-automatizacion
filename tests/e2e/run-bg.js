@@ -161,7 +161,12 @@ async function run(name, sc) {
       res.setHeader("Content-Type", "video/mp4");
       return res.end(sc ? Buffer.alloc(350000 + parseInt(sc, 10), 7) : video);
     }
-    if (req.url.startsWith("/media/")) { res.statusCode = 404; return res.end(); }
+    if (req.url.startsWith("/media/")) {
+      // Fuente de un vídeo generado (descarga directa, plan B): mismo tamaño que su descarga.
+      const m = req.url.match(/-s(\d{3})\.mp4/);
+      if (m) { res.setHeader("Content-Type", "video/mp4"); return res.end(Buffer.alloc(350000 + parseInt(m[1], 10), 7)); }
+      res.statusCode = 404; return res.end();
+    }
     if (req.url.startsWith("/vendor-prosemirror.js")) { res.setHeader("Content-Type", "text/javascript"); return res.end(fs.readFileSync(path.join(__dirname, "vendor-prosemirror.js"))); }
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);

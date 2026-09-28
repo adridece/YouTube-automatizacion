@@ -721,6 +721,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await saveJob();
         return { ok: true, jobId: job.id };
       }
+      case "DL_DIRECT": {
+        // Plan B de descarga (v2.8): guardar directamente la fuente del vídeo
+        // (<video src>) sin el menú de Flow. Usa el turno ya armado.
+        if (!job || job.id !== msg.jobId) return { ok: false, error: "no hay turno de descarga activo" };
+        const kind = urlKind(msg.url);
+        job.urlKind = kind;
+        job.createdAt = Date.now();
+        jlog("info", `Descarga directa de la fuente del vídeo (URL tipo ${kind}).`);
+        if (job.mode === "folder") {
+          saveToFolder({ url: msg.url, mime: msg.mime || "video/mp4" }); // termina el trabajo él solo (done/failed)
+          return { ok: true };
+        }
+        if (kind !== "https" && kind !== "data") return { ok: false, error: `con destino "Descargas de Chrome" no puedo guardar una URL ${kind}` };
+        job.status = "created";
+        job.downloadId = await ownDownload(msg.url, job.relPath);
+        await saveJob();
+        return { ok: true };
+      }
       case "DL_STATUS":
         return await jobStatus(msg.jobId);
       case "DL_DISARM":

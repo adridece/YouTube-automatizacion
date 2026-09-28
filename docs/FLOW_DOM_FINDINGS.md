@@ -104,6 +104,13 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 - **[SUPUESTO, v2.7]** Al adjuntar una imagen, la "caja" del Agent (el antecesor común del editor y del botón generar) cambia
   (aparece la miniatura). La extensión lo usa para comprobar que la imagen quedó adjunta.
 
+## Visto en la prueba real v2.7 (28 sep 2026, log del usuario)
+- **[V-indirecto]** Mientras se genera un vídeo, en la cuadrícula hay un `flow-pending-tile` **y** un `flow-video-tile` provisional sin
+  "%" cuyo menú contextual no tiene "Descargar". Al terminar, Flow pone el tile definitivo en un nodo nuevo.
+- **[V por el usuario]** Menú contextual del vídeo: `#mat-menu-panel-N > div > flow-video-context-menu-items > flow-media-context-menu-items
+  > flow-menu-item` (el 7.º es "Descargar", con `button > span > span` dentro) → submenú 720p / 1080p. La extensión busca por texto.
+- **[SUPUESTO]** Qué atributos estables tiene `flow-video-tile` (id, `src`, miniatura…). La v2.8 avisa en el log si no encuentra ninguno.
+
 ## Comportamiento de Chrome medido (Chromium 141, no depende de Flow)
 - **[V]** Pestaña oculta: `requestAnimationFrame` no se ejecuta (contador congelado). Al capturarla con `chrome.tabCapture` (o
   `getDisplayMedia`), Chrome la marca `visibilityState = "visible"` y la pinta a ~60 fps aunque el usuario esté en otra pestaña.
