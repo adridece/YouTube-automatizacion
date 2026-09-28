@@ -124,6 +124,21 @@ function accounts(f) {
 
 // ------------------------------------------------- DERIVADOS (en vivo)
 let flowTabs = [];
+let armedTabs = {}; // tabId -> acc (pestañas preparadas para segundo plano)
+async function refreshArmed() {
+  const r = await chrome.runtime.sendMessage({ type: "GET_ARMED" }).catch(() => null);
+  armedTabs = (r && r.armed) || {};
+}
+// Al abrir la ventanita estando en una pestaña de Flow, se prepara esa pestaña
+// para trabajar en segundo plano (Chrome solo lo permite tras pulsar la cereza en ella).
+async function armActiveFlowTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || "")) return;
+  const r = await chrome.runtime.sendMessage({ type: "ARM_TAB", tabId: tab.id }).catch(() => null);
+  if (r && r.ok && !r.already) toast(`Pestaña ${r.acc.replace("u", "/u/")}/ lista: seguirá trabajando aunque mires otra`);
+  else if (r && !r.ok && r.error) toast(`No pude preparar esta pestaña: ${r.error}`);
+  await refreshArmed();
+}
 async function refreshTabs() {
   flowTabs = await chrome.tabs.query({ url: ["https://flow.google.com/*", "https://labs.google/fx/tools/flow/*"] });
   const keys = [...new Set(flowTabs.map((t) => getFlowAccountKey(t.url)))];
@@ -156,9 +171,10 @@ function refreshDerived() {
     const tab = flowTabs.find((t) => getFlowAccountKey(t.url) === key);
     const el = $(`acc${k}_state`);
     if (!on) { el.textContent = ""; el.className = "tabstate"; continue; }
-    if (!tab) { el.innerHTML = `${icon("alert", 12)}sin pestaña /u/${esc(f[`acc${k}_num`])}/`; el.className = "tabstate bad"; }
-    else if (!/\/project\//.test(tab.url)) { el.innerHTML = `${icon("alert", 12)}abre un proyecto`; el.className = "tabstate bad"; }
-    else { el.innerHTML = `${icon("check", 12)}pestaña lista`; el.className = "tabstate ok"; }
+    if (!tab) { el.innerHTML = `${icon("alert", 12)}sin pestaña /u/${esc(f[`acc${k}_num`])}/`; el.className = "tabstate bad"; el.title = ""; }
+    else if (!/\/project\//.test(tab.url)) { el.innerHTML = `${icon("alert", 12)}abre un proyecto`; el.className = "tabstate bad"; el.title = ""; }
+    else if (!armedTabs[tab.id]) { el.innerHTML = `${icon("alert", 12)}pulsa 🍒 en esa pestaña`; el.className = "tabstate bad"; el.title = "Entra en esa pestaña de Flow y pulsa la cereza (o Alt+Shift+C) una vez: así seguirá trabajando aunque mires otra pestaña."; }
+    else { el.innerHTML = `${icon("check", 12)}lista · 2.º plano`; el.className = "tabstate ok"; el.title = "Preparada: seguirá trabajando aunque mires otra pestaña."; }
   }
   const all = accs.flatMap((a) => a.sceneNumbers);
   const overlap = all.filter((n, i) => all.indexOf(n) !== i);
@@ -224,6 +240,11 @@ $("grantFolder").addEventListener("click", async (e) => {
 });
 
 // -------------------------------------------------------- CHECKLIST
+function allArmed() {
+  const accs = accounts(readForm());
+  if (!accs.length) return false;
+  return accs.every((a) => { const t = flowTabs.find((x) => getFlowAccountKey(x.url) === a.accountKey); return t && armedTabs[t.id]; });
+}
 const CHECK_KEY = "fbrChecklist";
 let checks = {};
 function checklistItems() {
@@ -232,7 +253,7 @@ function checklistItems() {
     { id: "confirm", t: "Flow: «Confirmar antes de generar» = Siempre", d: "Ajustes ⚙ → Configuración del agente. Así la extensión lee el coste y solo aprueba si es ≤ 10 puntos." },
     { id: "model", t: "Flow: vídeo con «Omni 1.1 Flash», 9:16 y x1", d: "Imagen y vídeo en 9:16 y cantidad x1. La extensión nunca toca el modelo." },
     { id: "project", t: "Un proyecto NUEVO y vacío en cada cuenta", d: "Si ya hay imágenes «001», «002»… se puede confundir de imagen." },
-    { id: "windows", t: "Deja abiertas las pestañas de Flow (puedes usar otras)", d: "Flow trabaja en segundo plano: no hace falta mirarlo. La extensión impide que Chrome descarte esas pestañas y que el ordenador se duerma mientras trabaja. No las cierres ni recargues." },
+    { id: "armed", t: "Pestañas de Flow preparadas para segundo plano", d: "Entra en cada pestaña de Flow y pulsa la cereza (o Alt+Shift+C) una vez. Verás el icono de «compartiendo» en ella: es la extensión manteniéndola activa, no se graba nada. Luego puedes usar otras pestañas.", auto: allArmed() },
   ];
   if (dest === "downloads") items.push({ id: "askoff", t: "«Preguntar dónde guardar cada archivo» desactivado", d: 'Solo hace falta con este destino. <a href="#" data-open="chrome://settings/downloads">Abrir ajuste</a>' });
   else items.push({ id: "folderok", t: "Carpeta de destino elegida y con permiso", d: "Se comprueba sola al pulsar «Iniciar lote».", auto: folderState.has && folderState.perm === "granted" });
@@ -263,6 +284,7 @@ function showMsg(text, isErr) {
   m.className = isErr ? "msg err" : "msg";
   m.hidden = !text;
 }
+let startAnyway = false;
 $("start").addEventListener("click", async () => {
   showMsg("");
   const f = readForm();
@@ -286,6 +308,15 @@ $("start").addEventListener("click", async () => {
   if (needsAnims && !animations.size) problems.push("El kit no trae prompts de animación (el 2.º bloque [001]…).");
   if (problems.length) { showMsg(problems.map(esc).join("<br>"), true); return; }
 
+  const notArmed = accs.filter((a) => { const t = flowTabs.find((x) => getFlowAccountKey(x.url) === a.accountKey); return !t || !armedTabs[t.id]; });
+  if (notArmed.length && !startAnyway) {
+    startAnyway = true;
+    $("start").innerHTML = `${icon("play", 16)}Iniciar de todas formas`;
+    showMsg(`Sin preparar para segundo plano: ${notArmed.map((a) => a.accountKey.replace("u", "/u/") + "/").join(", ")}. Entra en esa pestaña y pulsa la cereza una vez; si no, Flow puede pararse cuando no la mires.`);
+    return;
+  }
+  startAnyway = false;
+  $("start").innerHTML = `${icon("play", 16)}Iniciar lote`;
   const unchecked = checklistItems().filter((it) => !it.auto && !checks[it.id]);
   const now = new Date();
   const batchFolder = buildBatchFolderName(now, f.prefix);
@@ -499,7 +530,10 @@ $("uiMode").addEventListener("change", async (e) => {
   logEntries = all.fbrLog || [];
   for (const [k, v] of Object.entries(all)) if (k.startsWith("batch_") && v && v.order) batches[k.slice(6)] = v;
   await refreshFolder();
+  await armActiveFlowTab().catch(() => {});
+  await refreshArmed().catch(() => {});
   await refreshTabs();
+  setInterval(async () => { await refreshArmed().catch(() => {}); refreshDerived(); }, 5000);
   renderProgress();
   renderLog();
   let tab = null;

@@ -38,6 +38,7 @@ const SCEN = {
   retry: { desc: "La imagen 002 se bloquea 3 veces y los 2 primeros vídeos también: se reintenta suavizando hasta que salen", u2: "policyImage=2&policyImageTimes=3&policyVideo=2", u3: "", range: ["1-2", "3"], expectPlanB: false, expectRetries: true },
   lazy: { desc: "Solo caja de prompt sin pintar estando oculta", u2: "lazyPanel=1", u3: "lazyPanel=1", range: ["1-2", "3"] },
   stallonly: { desc: 'Solo vídeo atascado al "100%" estando oculta', u2: "hiddenStall=1", u3: "hiddenStall=1", range: ["1-2", "3"], expectNamed: true },
+  capture: { desc: "PREPARADAS (captura, como tras pulsar la cereza): caja sin pintar + vídeo atascado + lista del \"+\" con rAF, sin mirar nunca Flow", u2: "hiddenStall=1&lazyPanel=1&rafList=1", u3: "hiddenStall=1&lazyPanel=1&rafList=1", range: ["1-2", "3"], arm: true, expectNamed: true, expectPlusMenu: true },
   long: { desc: "Un vídeo tarda 6 min con la pestaña oculta (frenado intensivo de Chrome)", u2: "videoMs=360000", u3: "", range: ["1", "3"], expectPlanB: false, timeoutMin: 12 },
 };
 
@@ -62,6 +63,8 @@ async function run(name, sc) {
   const chrome = spawn(CHROME, [
     `--user-data-dir=${prof}`, "--no-sandbox", "--no-first-run", "--no-default-browser-check",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--disable-features=DisableLoadExtensionCommandLineSwitch",
+    // Simula el clic del usuario en la cereza (permiso de captura) — solo para pruebas.
+    ...(sc.arm ? [`--allowlisted-extension-id=${EXT_ID}`] : []),
     "--remote-debugging-port=9336", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443", "--ignore-certificate-errors",
     "--no-proxy-server", "--window-size=1300,900", "about:blank",
   ], { stdio: "ignore" });
@@ -82,6 +85,14 @@ async function run(name, sc) {
     // Pestañas de Flow DE FONDO (nadie se engancha a ellas).
     await ev(`await chrome.tabs.create({ url: "https://flow.google.com/u/2/project/aaa?${sc.u2}", active: false }); await chrome.tabs.create({ url: "https://flow.google.com/u/3/project/bbb?${sc.u3}", active: false });`);
     await sleep(2500);
+    if (sc.arm) {
+      const r = await ev(`const tabs = await chrome.tabs.query({ url: "https://flow.google.com/*" }); const out = []; for (const t of tabs) out.push(await chrome.runtime.sendMessage({ type: "ARM_TAB", tabId: t.id })); return out;`);
+      console.log("  preparar pestañas:", JSON.stringify(r));
+      await sleep(1500);
+      // ¿Sigue preparada tras un F5? (la captura es de la pestaña, no de la página)
+      const afterReload = await ev(`const [t] = await chrome.tabs.query({ url: "https://flow.google.com/u/2/*" }); await chrome.tabs.reload(t.id); await new Promise((r) => setTimeout(r, 3000)); const g = await chrome.runtime.sendMessage({ type: "GET_ARMED" }); return Object.keys(g.armed).length;`);
+      check("tras F5 en una pestaña preparada, sigue preparada", afterReload === 2, `${afterReload} preparadas`);
+    }
     const kit = fs.readFileSync(path.join(ROOT, "examples", "sample-kit.txt"), "utf8");
     await ev(`
       const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); };
@@ -89,7 +100,9 @@ async function run(name, sc) {
       document.querySelector('input[name=dest][value=folder]').checked = true;
       const gm = document.getElementById("genMode"); gm.value = "paired"; gm.dispatchEvent(new Event("change", { bubbles: true }));
       await new Promise((r) => setTimeout(r, 500));
-      document.getElementById("start").click();`);
+      document.getElementById("start").click();
+      await new Promise((r) => setTimeout(r, 400));
+      if (!document.getElementById("startMsg").hidden) document.getElementById("start").click();`);
     const t0 = Date.now();
     let st = {};
     let flowActive = false;
@@ -110,7 +123,8 @@ async function run(name, sc) {
     const want = [...sc.range[0].split("-").map(Number), 3].filter((v, i, a) => a.indexOf(v) === i);
     const wantScenes = sc.range[0] === "1-2" ? [1, 2] : [1];
     check("las dos cuentas terminaron", b2 && b3 && b2.status === "done" && b3.status === "done", `u2=${b2 && b2.status} u3=${b3 && b3.status}`);
-    check("las pestañas de Flow estuvieron OCULTAS todo el tiempo", /EMPIEZA el lote en u2.*pestaña OCULTA/.test(log) && /EMPIEZA el lote en u3.*pestaña OCULTA/.test(log));
+    if (sc.arm) check("las dos pestañas estaban preparadas (captura) y Chrome las trató como visibles", /EMPIEZA el lote en u2.*pestaña visible.*preparada/.test(log) && /EMPIEZA el lote en u3.*pestaña visible.*preparada/.test(log));
+    else check("las pestañas de Flow estuvieron OCULTAS todo el tiempo", /EMPIEZA el lote en u2.*pestaña OCULTA/.test(log) && /EMPIEZA el lote en u3.*pestaña OCULTA/.test(log));
     check("nunca se cambió la vista a Flow", !flowActive);
     const names = [...wantScenes, 3].map((n) => `mundofut_${String(n).padStart(3, "0")}.mp4`);
     check(`vídeos guardados: ${names.join(", ")}`, names.every((n) => files[n] === 350000) && Object.keys(files).length === names.length, JSON.stringify(files));
@@ -139,7 +153,7 @@ async function run(name, sc) {
   }).listen(8443);
   const all = [];
   try {
-    for (const n of (process.env.FBR_BG || "normal,raf,stall,retry").split(",")) all.push(...(await run(n, SCEN[n])));
+    for (const n of (process.env.FBR_BG || "capture,normal,raf,stall,retry").split(",")) all.push(...(await run(n, SCEN[n])));
   } finally {
     server.close();
   }

@@ -97,6 +97,12 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 - **[SUPUESTO]** Que el Agent renombre los VÍDEOS si se le pide (sí lo hace con las imágenes).
 
 ## Comportamiento de Chrome medido (Chromium 141, no depende de Flow)
+- **[V]** Pestaña oculta: `requestAnimationFrame` no se ejecuta (contador congelado). Al capturarla con `chrome.tabCapture` (o
+  `getDisplayMedia`), Chrome la marca `visibilityState = "visible"` y la pinta a ~60 fps aunque el usuario esté en otra pestaña.
+- **[V]** `chrome.tabCapture.getMediaStreamId({targetTabId})` falla con "Extension has not been invoked for the current page"
+  si el usuario no ha pulsado la extensión en esa pestaña. Tras pulsarla, funciona desde el service worker y la captura se
+  sostiene en el documento offscreen. La captura sobrevive a un F5 de la pestaña.
+- **[V]** Log real: en la pestaña oculta de u3 la página mostraba "Cargando…" durante 90 s (Flow no arranca sin estar visible).
 - **[V]** Con "Preguntar dónde guardar" **activado**, `chrome.downloads.download({saveAs:false})` **también** abre el diálogo: la
   descarga se queda `in_progress` con `filename` vacío. No hay forma por código de saltárselo con la API de descargas.
 - **[V]** Cancelar la descarga en `chrome.downloads.onCreated` la deja `interrupted/USER_CANCELED` en milisegundos, antes del diálogo.

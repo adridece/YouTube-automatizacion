@@ -1,7 +1,9 @@
 # Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.2.0)
 
 ## P0 — bloquea el uso real
-0. **v2.2 en real**: (a) con el usuario en otra pestaña, ¿terminan los vídeos? (page-hook "despierto"); (b) ¿renombra el Agent
+0. **v2.3 en real**: pulsar la cereza en cada pestaña de Flow → ¿aparece "lista · 2.º plano" y el icono de compartir?, ¿funciona el
+   navegador del usuario con `chrome.tabCapture` (no tiene panel lateral: podría faltar también)? Luego lote mirando otra pestaña.
+0b. **v2.2 en real**: (a) con el usuario en otra pestaña, ¿terminan los vídeos? (page-hook "despierto"); (b) ¿renombra el Agent
    cada vídeo como `<prefijo>_<NNN>_<HHMM>`? (el log dice "y renombrado" o "El Agent no renombró"); (c) ¿arranca la cuenta
    cuya pestaña nunca se vio?; (d) reintentos suavizados ante bloqueos.
 1. **Prueba real de extremo a extremo** con la v2 (rango `1-1` en una cuenta, luego `1-2`, luego el lote). Nunca se ha completado

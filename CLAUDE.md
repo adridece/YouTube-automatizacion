@@ -42,7 +42,7 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (28 sep 2026 — v2.2.0, "Cerezium Autopilot")
+## Estado actual (28 sep 2026 — v2.3.0, "Cerezium Autopilot")
 Rehecha entera en la ronda del 28 sep (ver `docs/BUG_HISTORY.md` #22–34): log persistente, panel lateral, descargas de una en una
 con destino "Carpeta elegida" (sin diálogo aunque "Preguntar dónde guardar" esté activado — el usuario lo quiere activado),
 cuentas en paralelo, reanudación tras F5, límite de ritmo. **Todo probado con Chromium real + Flow SIMULADO (`npm run e2e`, 44/44)**,
@@ -50,7 +50,9 @@ pero **aún no se ha completado NUNCA una ejecución real en Flow**. v2.1: el na
 ("SidePanel API not available") → ventanita de extensión; trabajo en segundo plano (nunca activar Flow; permiso de descargas
 automáticas vía `contentSettings`, sin él Chrome retiene la 2.ª descarga con Flow oculto — `npm run e2e:bg`).
 **Primera prueba real (v2.1.0, 28 sep)**: imágenes, aviso de coste y "Aprobar" funcionan; con Flow oculto los vídeos se quedaban
-al 100% → v2.2 `page-hook.js` mantiene la página "despierta" solo durante el lote, y cada vídeo se renombra vía Agent. Ver BUG_HISTORY #43–47. Lo primero con el usuario: la prueba de `README.md` →
+al 100% → v2.2 `page-hook.js` + renombrado de vídeos vía Agent. **Prueba real v2.2**: no bastó (u3 "Cargando…") → **v2.3: captura de
+pestaña (`tabCapture`)**, que hace que Chrome trate la pestaña como visible de verdad; requiere que el usuario pulse la cereza una
+vez en cada pestaña de Flow. Ver BUG_HISTORY #43–48. Regla: para cualquier cosa de segundo plano, prueba con `npm run e2e:bg`. Lo primero con el usuario: la prueba de `README.md` →
 "Primera prueba de la v2", y pedirle el log copiado. Ver `docs/TODO.md`.
 
 ## Reglas de código (lecciones costosas — respétalas)

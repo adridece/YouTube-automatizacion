@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Cerezium Autopilot — Google Flow",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Cerezium Autopilot: tus Shorts en piloto automático en Google Flow. Genera las imágenes, anima cada escena y guarda los vídeos numerados en una carpeta nueva por lote.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -14,7 +14,9 @@
     "alarms",
     "scripting",
     "power",
-    "contentSettings"
+    "contentSettings",
+    "tabCapture",
+    "activeTab"
   ],
   "host_permissions": [
     "https://flow.google.com/*",
@@ -66,5 +68,13 @@
   "background": {
     "service_worker": "background.js"
   },
-  "short_name": "Cerezium"
+  "short_name": "Cerezium",
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+C"
+      },
+      "description": "Abrir Cerezium y preparar esta pestaña de Flow"
+    }
+  }
 }
