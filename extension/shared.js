@@ -154,3 +154,289 @@ function ensureVideoDuration(prompt, seconds) {
   if (anyDuration.test(text)) return text.replace(anyDuration, seconds + " seconds");
   return (text.trim() ? text.trim() + " " : "") + "Duration: " + seconds + " seconds.";
 }
+
+// ======================================================================
+// v2 — Lógica pura añadida en la ronda de septiembre 2026 (testeada en
+// tests/shared.test.js). Nada de aquí toca el DOM ni chrome.*.
+// ======================================================================
+
+// --- Nombres de archivo y carpetas ------------------------------------
+
+// Formatos de nombre que el usuario aceptó (los tres le valen):
+//   "prefijo" -> mundofut_001.mp4   (por defecto)
+//   "vid"     -> vid1.mp4
+//   "num"     -> 001.mp4
+const NAME_FORMATS = {
+  prefijo: { label: "<prefijo>_001.mp4" },
+  vid: { label: "vid1.mp4" },
+  num: { label: "001.mp4" },
+};
+
+// Deja un nombre apto para Windows/macOS: sin \ / : * ? " < > | ni controles,
+// espacios -> "_", sin puntos/espacios al final, máx. 60 caracteres.
+function sanitizeName(s, fallback) {
+  const clean = String(s || "")
+    .normalize("NFC")
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[. ]+$/g, "")
+    .slice(0, 60);
+  return clean || fallback || "clip";
+}
+
+function buildVideoFilename(format, prefix, num, ext) {
+  const e = ext || "mp4";
+  if (format === "vid") return `vid${parseInt(num, 10)}.${e}`;
+  if (format === "num") return `${pad3(num)}.${e}`;
+  return `${sanitizeName(prefix, "clip")}_${pad3(num)}.${e}`;
+}
+
+// Carpeta NUEVA por lote: "2026-09-28_1530_mundofut". Se usa la hora local.
+function buildBatchFolderName(date, prefix) {
+  const d = date instanceof Date ? date : new Date(date);
+  const two = (n) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}_${two(d.getHours())}${two(d.getMinutes())}`;
+  return `${stamp}_${sanitizeName(prefix, "lote")}`;
+}
+
+// ¿El nombre final que dio Chrome corresponde al que pedimos? Chrome puede
+// añadir " (1)" si ya existía (conflictAction "uniquify") y usa "\" en Windows.
+function downloadNameMatches(finalPath, wantedName) {
+  if (!finalPath || !wantedName) return false;
+  const base = String(finalPath).split(/[\\/]/).pop();
+  const dot = wantedName.lastIndexOf(".");
+  const stem = dot > 0 ? wantedName.slice(0, dot) : wantedName;
+  const ext = dot > 0 ? wantedName.slice(dot) : "";
+  if (base === wantedName) return true;
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${esc(stem)} \\(\\d+\\)${esc(ext)}$`).test(base);
+}
+
+// ¿Esta descarga que acaba de registrar Chrome puede ser la de Flow?
+// (blob:/data: creados por la página de Flow, o https con Flow de referente,
+// o dominios de Google donde Flow guarda los ficheros).
+function isFlowDownloadCandidate(item) {
+  if (!item) return false;
+  const url = String(item.finalUrl || item.url || "");
+  const ref = String(item.referrer || "");
+  if (/^blob:https:\/\/(flow\.google\.com|labs\.google)\//.test(url)) return true;
+  if (/^data:(video|image|application\/octet-stream)/.test(url)) return true;
+  if (/^https:\/\/(flow\.google\.com|labs\.google)\//.test(ref)) return true;
+  if (/^https:\/\/([a-z0-9-]+\.)*(googleusercontent\.com|googleapis\.com|google\.com|labs\.google)\//.test(url)) return true;
+  return false;
+}
+
+function urlKind(url) {
+  const u = String(url || "");
+  if (u.startsWith("blob:")) return "blob";
+  if (u.startsWith("data:")) return "data";
+  if (/^https?:/.test(u)) return "https";
+  return "otro";
+}
+
+// --- Menú "+" (lista de assets) ----------------------------------------
+
+// El textContent real de un item es "001Imagen" / "001Vídeo" (verificado).
+// Devuelve { name, kind } con kind "image" | "video" | null.
+function parseAssetItemText(text) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  const m = t.match(/^(.*?)\s*(Imagen|Image|V[ií]deo|Video)$/i);
+  if (!m) return { name: t, kind: null };
+  return { name: m[1].trim(), kind: /^im/i.test(m[2]) ? "image" : "video" };
+}
+
+// Índices de los items que son EXACTAMENTE la imagen `label` (no un vídeo
+// que se llame igual, ni "0010"). Orden = orden de la lista (Recientes).
+function findAssetMatches(texts, label) {
+  const out = [];
+  texts.forEach((txt, i) => {
+    const p = parseAssetItemText(txt);
+    if (p.name === label && p.kind !== "video") out.push(i);
+  });
+  return out;
+}
+
+// --- Tiles --------------------------------------------------------------
+
+// Claves que están en `after` y no en `before` (tiles nuevos), en orden.
+function diffNewKeys(before, after) {
+  const seen = new Set(before || []);
+  return (after || []).filter((k) => k && !seen.has(k));
+}
+
+// Elige el vídeo de una escena entre los tiles nuevos que no estén ya
+// asignados a otra escena. Devuelve { key, ambiguous }.
+function pickNewVideoKey(newKeys, assignedKeys) {
+  const assigned = new Set(assignedKeys || []);
+  const free = (newKeys || []).filter((k) => !assigned.has(k));
+  if (free.length === 0) return { key: null, ambiguous: false };
+  return { key: free[0], ambiguous: free.length > 1 };
+}
+
+// --- Mensajes del Agent (detectados por texto, no por selector) --------
+
+// [V] = visto en vivo · [SUPUESTO] = redacción no confirmada todavía.
+const FLOW_SIGNALS = {
+  rateLimit: /preguntando demasiado r[aá]pido/gi, // [V]
+  policy: /bloquead[ao]s? por nuestras pol[ií]ticas|pol[ií]ticas de seguridad/gi, // [V]
+  genError: /no se ha podido generar/gi, // [V] tarjeta de error ("No se te ha cobrado")
+  cancelled: /he cancelado la generaci[oó]n/gi, // [V] tras "Rechazar"
+  noPoints: /(no tienes (suficientes )?(puntos|cr[eé]ditos))|(puntos|cr[eé]ditos) insuficientes|sin (puntos|cr[eé]ditos)|has (alcanzado|agotado)[^.]{0,40}(l[ií]mite|puntos|cr[eé]ditos)|l[ií]mite diario/gi, // [SUPUESTO]
+};
+
+function countMatches(text, re) {
+  const m = String(text || "").match(new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g"));
+  return m ? m.length : 0;
+}
+
+// Compara el texto del panel del Agent antes y después de enviar: cuenta
+// cuántas apariciones NUEVAS hay de cada señal (las viejas del historial del
+// chat no cuentan).
+function detectNewSignals(beforeText, afterText) {
+  const out = {};
+  for (const [k, re] of Object.entries(FLOW_SIGNALS)) {
+    out[k] = Math.max(0, countMatches(afterText, re) - countMatches(beforeText, re));
+  }
+  return out;
+}
+
+// Espera creciente para "Estás preguntando demasiado rápido": 30 s, 60 s,
+// 120 s, 240 s… con tope.
+function backoffDelayMs(attempt, baseMs, maxMs) {
+  const base = baseMs || 30000;
+  const max = maxMs || 300000;
+  return Math.min(max, base * Math.pow(2, Math.max(0, attempt - 1)));
+}
+
+// --- Estado del lote (persistente en chrome.storage) --------------------
+
+// Estados por paso: pending · running · done · failed · review (hay que
+// mirarlo a mano: p. ej. se aprobó el coste pero no apareció el vídeo; NO se
+// reintenta solo para no gastar puntos dos veces) · skipped · nopoints.
+const STEP_STATUSES = ["pending", "running", "done", "failed", "review", "skipped", "nopoints"];
+
+function createBatchState({ batchId, accountKey, sceneNumbers, config, now }) {
+  const scenes = {};
+  for (const n of sceneNumbers) {
+    scenes[n] = { image: "pending", video: "pending", download: "pending", error: null, videoKey: null, file: null };
+  }
+  return {
+    v: 2,
+    batchId,
+    accountKey,
+    createdAt: now || Date.now(),
+    updatedAt: now || Date.now(),
+    status: "running", // running · done · stopped · error · nopoints
+    phase: "images", // images · videos · downloads · done
+    order: sceneNumbers.slice(),
+    config: config || {},
+    scenes,
+  };
+}
+
+function setSceneStep(state, num, step, status, extra) {
+  const s = state.scenes[num];
+  if (!s) return state;
+  s[step] = status;
+  if (extra) Object.assign(s, extra);
+  state.updatedAt = Date.now();
+  return state;
+}
+
+// Resumen para la barra de progreso y el informe final. Cada escena aporta
+// 3 pasos (imagen, vídeo, descarga) en modo "paired".
+function summarizeBatch(state) {
+  const steps = ["image", "video", "download"];
+  let total = 0;
+  let finished = 0;
+  const failed = [];
+  const review = [];
+  const nopoints = [];
+  const done = [];
+  for (const n of state.order) {
+    const s = state.scenes[n];
+    let sceneOk = true;
+    for (const st of steps) {
+      total++;
+      if (["done", "failed", "review", "skipped", "nopoints"].includes(s[st])) finished++;
+      if (s[st] !== "done") sceneOk = false;
+    }
+    if (steps.some((st) => s[st] === "failed")) failed.push(n);
+    else if (steps.some((st) => s[st] === "review")) review.push(n);
+    else if (steps.some((st) => s[st] === "nopoints")) nopoints.push(n);
+    if (sceneOk) done.push(n);
+  }
+  return {
+    total,
+    finished,
+    percent: total ? Math.round((finished / total) * 100) : 0,
+    done,
+    failed,
+    review,
+    nopoints,
+  };
+}
+
+// Al reanudar tras un F5 / cierre de pestaña: lo que estaba "en curso" no se
+// puede saber si llegó a enviarse. Para imagen y descarga (no cuestan puntos,
+// o no cuestan de nuevo) se vuelve a "pending"; para el VÍDEO se marca
+// "review" si ya se había aprobado el coste (podría estar generándose o
+// cobrado), y "pending" si no.
+function prepareResume(state) {
+  for (const n of state.order) {
+    const s = state.scenes[n];
+    if (s.image === "running") s.image = "pending";
+    if (s.download === "running") s.download = "pending";
+    if (s.video === "running") {
+      if (s.videoApproved) {
+        s.video = "review";
+        s.error = "La página se recargó mientras se generaba este vídeo (el coste ya estaba aprobado). Revisa en Flow si se generó; no lo repito para no gastar puntos dos veces.";
+      } else {
+        s.video = "pending";
+      }
+    }
+  }
+  state.status = "running";
+  state.updatedAt = Date.now();
+  return state;
+}
+
+// --- Log ----------------------------------------------------------------
+
+const PHASE_LABELS = { images: "Imágenes", videos: "Vídeo", downloads: "Descarga", setup: "Inicio", plan: "Plan", run: "Lote" };
+const LEVEL_LABELS = { info: "INFO", ok: "OK", warn: "AVISO", error: "ERROR" };
+
+function formatLogTime(t) {
+  const d = new Date(t);
+  const two = (n) => String(n).padStart(2, "0");
+  return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+}
+
+// "08:43:55 [u2] [E003] [Vídeo] ERROR: texto"
+function formatLogEntry(e) {
+  const parts = [formatLogTime(e.t)];
+  if (e.acc) parts.push(`[${e.acc}]`);
+  if (e.scene != null) parts.push(`[E${pad3(e.scene)}]`);
+  if (e.phase) parts.push(`[${PHASE_LABELS[e.phase] || e.phase}]`);
+  return `${parts.join(" ")} ${LEVEL_LABELS[e.level] || "INFO"}: ${e.msg}`;
+}
+
+function logToText(entries, header) {
+  const lines = (entries || []).map(formatLogEntry);
+  return (header ? header + "\n" : "") + lines.join("\n");
+}
+
+// Añade entradas manteniendo solo las últimas `max`.
+function appendCapped(list, items, max) {
+  const out = (list || []).concat(items || []);
+  return out.length > max ? out.slice(out.length - max) : out;
+}
+
+// Mapa de resolución elegida -> texto del submenú "Descargar" de Flow.
+// Si la elegida no existe en la cuenta, se cae a la siguiente de la lista.
+function resolutionFallbacks(resolution, kind) {
+  if (kind === "image") return ["1K", "2K"];
+  if (resolution === "720p") return ["720p", "1080p"];
+  return ["1080p", "720p"];
+}

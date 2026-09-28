@@ -2,7 +2,7 @@
 
 El kit lo genera el usuario con su "Prompt maestro" de MUNDO FUT en una conversación de Claude (secciones
 7.2 "todos los prompts de imagen juntos" y 7.3 "todos los prompts de animación juntos"). Lo pega tal cual
-en el popup, normalmente **con los bloques de código (```) y los encabezados incluidos**.
+en el panel lateral de la extensión, normalmente **con los bloques de código (```) y los encabezados incluidos**.
 
 Reglas que implementa `splitCombinedPrompts` (`extension/shared.js`):
 - Cada prompt empieza por un marcador `[001]`, `[002]`… (3 dígitos).

@@ -28,8 +28,12 @@ para otras cosas). El audio/voz queda fuera del alcance de la extensión (se gen
 2. **Animaciones (Fase 2A)**, **una a una y en orden**: adjuntar al chat de Flow la imagen correspondiente
    (botón "+", elegir la imagen por su nombre, "Añadir a petición" — sin descargarla), escribir el prompt de animación
    de esa escena, generar, esperar a que termine (la IA tarda; a veces hay cola por demanda) y pasar a la siguiente.
-3. **Descarga (Fase 2B)**: cuando han terminado **todas** las animaciones, descargar los vídeos, **bien nombrados**
-   (`<prefijo>_<NNN>.mp4`), sin diálogos de "guardar como", en la resolución de esa cuenta.
+3. **Descarga (Fase 2B)**: cuando han terminado **todas** las animaciones, descargar los vídeos **de uno en uno** (esperando a que
+   cada uno termine), **bien nombrados**, sin diálogos de "guardar como", en la resolución de esa cuenta.
+   - Nombre: le valen `mundofut_001.mp4`, `vid1.mp4` o `001.mp4` (elegible en el panel; por defecto el primero).
+   - Todos los vídeos de un lote en una **carpeta NUEVA** `<fecha>_<hora>_<prefijo>/`, la misma para las dos cuentas.
+   - Los quiere en el **Escritorio** y quiere **mantener activado** "Preguntar dónde guardar" de Chrome (28 sep 2026). Solución:
+     destino "Carpeta elegida" (elige el Escritorio una vez).
 
 ## Coste (importante, lo repitió varias veces)
 - Cada vídeo debe costar **como máximo 10 puntos**. Si Flow pide más, **no se aprueba**: se rechaza y se avisa.
@@ -44,6 +48,10 @@ para otras cosas). El audio/voz queda fuera del alcance de la extensión (se gen
 ## Ejecución
 - Todo automático. Corre en segundo plano; el usuario no quiere vigilarlo. Los errores/avances deben poder leerse
   después (no mensajes que desaparecen) y debe avisar al terminar o al fallar.
+- Log legible con hora, cuenta, nº de escena y fase; botón "Copiar log" para pegárselo a Claude.
+- Las dos cuentas pueden ir **a la vez** (por defecto) o una tras otra.
+- Interfaz oscura y actual, en español, usable con teclado, que no se cierre sola (panel lateral) y que en la página de Flow
+  no tape nada (panel plegable).
 - Puede haber esperas largas (la IA "piensa", los vídeos se ponen en cola): esperar sin volver a pulsar "generar".
 
 ## Cosas que el usuario NO quiere

@@ -7,24 +7,45 @@ MUNDO FUT (sirve igual para The Odd Ledger). **Contexto completo del proyecto: [
 ## Instalar en Chrome
 1. `chrome://extensions` → activa **Modo de desarrollador** → **Cargar descomprimida** → elige la carpeta **`extension/`**.
 2. Tras cualquier cambio de código: botón ⟳ de la extensión **y F5 en las pestañas de Flow**.
+3. Pulsa el icono de la extensión: se abre el **panel lateral** (no se cierra al cambiar de pestaña).
 
-## Antes de cada lote (10 segundos)
+## Antes de cada lote (lo repite el checklist del panel)
 - **Flow** → Ajustes ⚙ → "Configuración del agente": *Confirmar antes de generar* = **Siempre**; vídeo = **Omni 1.1 Flash**; 9:16 y x1.
-- **Chrome** → `chrome://settings/downloads`: **desactiva "Preguntar dónde guardar cada archivo"**. Si quieres los vídeos en el Escritorio,
-  pon ahí el Escritorio como carpeta de descargas (los archivos caen en `MundoFutFlow/`).
-- Deja abiertas las dos pestañas de Flow (`/u/2/` y `/u/3/`), cada una con su cuenta, preferiblemente en una **ventana propia**.
+- Un **proyecto nuevo** en cada cuenta, y cada cuenta (`/u/2/`, `/u/3/`) en **su propia ventana, visible** (no minimizada).
+- **Destino "Carpeta elegida"** (recomendado): en el panel → Salida → **Elegir** → el Escritorio (o una carpeta dentro). Funciona
+  **aunque tengas activado** "Preguntar dónde guardar cada archivo". Tras reiniciar Chrome, al pulsar "Iniciar lote" Chrome
+  puede preguntar una vez si permites el acceso a esa carpeta.
+- Destino "Descargas de Chrome": los vídeos van a `Descargas/MundoFutFlow/<lote>/`; con "Preguntar dónde guardar" activado Chrome
+  preguntará en cada vídeo.
 
 ## Uso
-Popup de la extensión → pega el kit completo → rango de escenas de cada cuenta → **Plan multi-cuenta → Ejecutar**.
-Cada vídeo debe costar **10 puntos**; si Flow pide más, la extensión lo rechaza y te lo dice.
+Panel → **Lote**: pega el kit completo → cuentas y rangos (A: `2` · `1-5` · 1080p; B: `3` · `6-8` · 720p) → nombre de archivo →
+**Iniciar lote**. La pestaña **Progreso** muestra cada escena (imagen · vídeo · descarga) y **Log** todo lo que pasa, con
+**Copiar log**. En la página de Flow hay una píldora plegable abajo a la izquierda (se puede mover de esquina).
+Cada vídeo debe costar **10 puntos**; si Flow pide más, la extensión pulsa "Rechazar", deja de generar en esa cuenta y te lo dice.
+
+## Primera prueba de la v2 (en este orden; las dos primeras cuestan 0 puntos)
+1. Recarga la extensión (⟳) y pulsa F5 en tus pestañas de Flow. Abre el panel lateral (icono de la extensión).
+2. Salida → **Elegir** → Escritorio (o crea `Escritorio/MundoFut`). Debe poner "· con permiso".
+3. **Prueba A — descarga (0 puntos)**: en un proyecto con vídeos ya generados. Opciones avanzadas → "PRUEBA de descarga", una sola
+   cuenta, rango `1-2`, **Iniciar lote**. Esperado: carpeta nueva `Escritorio/<fecha>_<hora>_mundofut/` con `mundofut_001.mp4` y
+   `mundofut_002.mp4`, **sin ningún diálogo** aunque tengas activado "Preguntar dónde guardar".
+4. **Prueba B — ensayo (0 puntos)**: en un proyecto con imágenes llamadas `001`, `002`. Opciones avanzadas → "ENSAYO sin gastar",
+   rango `1-2`, kit completo pegado. Esperado: adjunta cada imagen con el "+", escribe su prompt, pulsa generar, sale el aviso de
+   coste **y la extensión pulsa "Rechazar"**. El log dice "ENSAYO: … 10 puntos … 0 puntos gastados".
+5. **Prueba C — real (10 puntos)**: modo normal, proyecto nuevo, kit de 1 escena (o rango `1-1`), una cuenta.
+6. Luego el lote completo con las dos cuentas.
+7. Si algo falla: pestaña **Log → Copiar log** y pégamelo entero; si es algo de la página, ejecuta `tools/flow-diagnostic.js`
+   en la consola de Flow (mejor con el menú "+" abierto) y pégame también el resultado.
 
 ## Desarrollo
 ```bash
-npm run verify     # node --check de todo + tests (lógica pura)
+npm run verify     # sintaxis de todo + ids del panel + tests (lógica pura)
+npm run e2e        # Chromium real + extensión + Flow SIMULADO (tests/e2e/), capturas en tests/e2e/.out/
 npm run zip        # genera flow-batch-extension.zip con solo extension/
 ```
-Sin dependencias ni paso de build. `tools/flow-diagnostic.js` es un script de solo lectura para pegar en la consola de Flow y
-compartir el estado del DOM cuando algo falle.
+Sin dependencias ni paso de build (el e2e usa el Playwright/Chromium preinstalado del entorno de Claude Code).
+`tools/flow-diagnostic.js` es un script de solo lectura para pegar en la consola de Flow y compartir el estado del DOM.
 
 ## Seguir desarrollando con Claude Code en la nube
 1. Crea un repositorio **vacío** (mejor privado) en GitHub.

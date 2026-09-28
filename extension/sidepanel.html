@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flow Batch Runner</title>
+<link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo" aria-hidden="true" data-icon="spark"></span>
+      <div>
+        <h1>Flow Batch Runner</h1>
+        <p class="sub">MUNDO FUT · <span id="version"></span></p>
+      </div>
+    </div>
+    <span id="globalStatus" class="chip" role="status" aria-live="polite">Inactivo</span>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Secciones">
+    <button role="tab" id="tab-lote" aria-controls="panel-lote" aria-selected="true"><span data-icon="layers"></span>Lote</button>
+    <button role="tab" id="tab-progreso" aria-controls="panel-progreso" aria-selected="false" tabindex="-1"><span data-icon="activity"></span>Progreso <span id="progBadge" class="badge" hidden></span></button>
+    <button role="tab" id="tab-log" aria-controls="panel-log" aria-selected="false" tabindex="-1"><span data-icon="list"></span>Log <span id="errBadge" class="badge err" hidden></span></button>
+  </nav>
+
+  <!-- =============================== LOTE =============================== -->
+  <main id="panel-lote" role="tabpanel" aria-labelledby="tab-lote">
+    <section class="card">
+      <div class="card-h"><span data-icon="file"></span><h2>Kit del Short</h2></div>
+      <label for="prompts" class="sr">Kit completo (prompts de imagen y de animación)</label>
+      <textarea id="prompts" spellcheck="false" placeholder="Pega aquí el kit completo, tal cual: primero [001]…[00N] de imagen y luego [001]…[00N] de animación."></textarea>
+      <div id="kitSummary" class="chips" aria-live="polite"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><span data-icon="users"></span><h2>Cuentas</h2><span id="tabsFound" class="muted small"></span></div>
+      <div class="acc" data-acc="A">
+        <div class="acc-h">
+          <label class="switch"><input type="checkbox" id="accA_on" checked /><span></span><b>Cuenta A</b></label>
+          <span class="tabstate" id="accA_state"></span>
+        </div>
+        <div class="grid3">
+          <label>Cuenta /u/N/<input id="accA_num" inputmode="numeric" value="2" /></label>
+          <label>Escenas<input id="accA_range" value="1-5" placeholder="1-5" /></label>
+          <label>Resolución<select id="accA_res"><option value="1080p">1080p</option><option value="720p">720p</option></select></label>
+        </div>
+      </div>
+      <div class="acc" data-acc="B">
+        <div class="acc-h">
+          <label class="switch"><input type="checkbox" id="accB_on" checked /><span></span><b>Cuenta B</b></label>
+          <span class="tabstate" id="accB_state"></span>
+        </div>
+        <div class="grid3">
+          <label>Cuenta /u/N/<input id="accB_num" inputmode="numeric" value="3" /></label>
+          <label>Escenas<input id="accB_range" value="6-8" placeholder="6-8" /></label>
+          <label>Resolución<select id="accB_res"><option value="1080p">1080p</option><option value="720p" selected>720p</option></select></label>
+        </div>
+      </div>
+      <div class="seg" role="radiogroup" aria-label="Cómo ejecutar las dos cuentas">
+        <label><input type="radio" name="runMode" value="parallel" checked /><span>A la vez</span></label>
+        <label><input type="radio" name="runMode" value="sequential" /><span>Una tras otra</span></label>
+      </div>
+      <p class="hint" id="rangeHint"></p>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><span data-icon="folder"></span><h2>Salida</h2></div>
+      <div class="grid2">
+        <label>Nombre de archivo
+          <select id="nameFormat">
+            <option value="prefijo">prefijo_001.mp4</option>
+            <option value="vid">vid1.mp4</option>
+            <option value="num">001.mp4</option>
+          </select>
+        </label>
+        <label>Prefijo<input id="prefix" value="mundofut" /></label>
+      </div>
+      <div class="dest" role="radiogroup" aria-label="Dónde guardar los vídeos">
+        <label class="dest-opt">
+          <input type="radio" name="dest" value="folder" checked />
+          <span class="dest-body">
+            <b>Carpeta elegida <em class="tag">recomendado</em></b>
+            <small>Sin diálogos aunque tengas activado «Preguntar dónde guardar». Puede ser el Escritorio.</small>
+            <span class="folder-row">
+              <span id="folderName" class="folder-name">Sin carpeta</span>
+              <button type="button" id="pickFolder" class="btn sm"><span data-icon="folder"></span>Elegir</button>
+              <button type="button" id="grantFolder" class="btn sm" hidden><span data-icon="key"></span>Conceder acceso</button>
+            </span>
+          </span>
+        </label>
+        <label class="dest-opt">
+          <input type="radio" name="dest" value="downloads" />
+          <span class="dest-body">
+            <b>Carpeta de descargas de Chrome</b>
+            <small>Va a Descargas/MundoFutFlow/. Con «Preguntar dónde guardar» activado, Chrome pedirá confirmar cada vídeo.</small>
+          </span>
+        </label>
+      </div>
+      <p class="pathpreview"><span data-icon="arrow"></span><code id="pathPreview"></code></p>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><span data-icon="check"></span><h2>Antes de empezar</h2><span id="checkCount" class="muted small"></span></div>
+      <ul class="checklist" id="checklist"></ul>
+    </section>
+
+    <details class="card adv">
+      <summary><span data-icon="sliders"></span>Opciones avanzadas</summary>
+      <div class="grid2">
+        <label>Qué hacer
+          <select id="genMode">
+            <option value="paired">Imágenes → vídeos → descargar (normal)</option>
+            <option value="animationsOnly">Solo vídeos (las imágenes ya existen)</option>
+            <option value="imagesOnly">Solo imágenes (y descargarlas)</option>
+            <option value="dryRun">ENSAYO sin gastar: llega al aviso de coste y pulsa Rechazar</option>
+            <option value="downloadTest">PRUEBA de descarga: vídeos que ya existen (0 puntos)</option>
+          </select>
+        </label>
+        <label>Espera máx. por vídeo (min)<input id="maxWait" type="number" min="3" max="60" value="10" /></label>
+      </div>
+      <label class="check"><input type="checkbox" id="bringFront" checked /> Poner cada pestaña de Flow al frente <b>dentro de su ventana</b> (no cambia de ventana)</label>
+      <label class="check"><input type="checkbox" id="autoRun" /> Auto-inicio: lanzar solo este lote al abrir Flow en cada cuenta</label>
+      <div class="row-btns">
+        <button type="button" id="saveAuto" class="btn sm">Guardar auto-inicio</button>
+        <button type="button" id="resetAuto" class="btn sm ghost">Permitir que se repita</button>
+      </div>
+    </details>
+
+    <div class="actions">
+      <p id="startMsg" class="msg" role="alert" hidden></p>
+      <button type="button" id="start" class="btn primary big"><span data-icon="play"></span>Iniciar lote</button>
+      <button type="button" id="stop" class="btn danger big" hidden><span data-icon="stop"></span>Detener</button>
+    </div>
+  </main>
+
+  <!-- ============================= PROGRESO ============================= -->
+  <main id="panel-progreso" role="tabpanel" aria-labelledby="tab-progreso" hidden>
+    <div id="accountsProgress"></div>
+    <div class="actions">
+      <button type="button" id="stop2" class="btn danger big" hidden><span data-icon="stop"></span>Detener</button>
+    </div>
+    <p class="legend">
+      <span><i class="st st-pending"></i>pendiente</span><span><i class="st st-running"></i>en curso</span>
+      <span><i class="st st-done"></i>hecho</span><span><i class="st st-failed"></i>fallido</span><span><i class="st st-review"></i>revisar</span>
+    </p>
+  </main>
+
+  <!-- ================================ LOG =============================== -->
+  <main id="panel-log" role="tabpanel" aria-labelledby="tab-log" hidden>
+    <div class="log-bar">
+      <div class="seg small" role="radiogroup" aria-label="Filtrar log">
+        <label><input type="radio" name="logFilter" value="all" checked /><span>Todo</span></label>
+        <label><input type="radio" name="logFilter" value="problems" /><span>Avisos y errores</span></label>
+      </div>
+      <div class="row-btns">
+        <button type="button" id="copyLog" class="btn sm"><span data-icon="copy"></span>Copiar log</button>
+        <button type="button" id="saveLog" class="btn sm ghost"><span data-icon="download"></span>.txt</button>
+        <button type="button" id="clearLog" class="btn sm ghost" aria-label="Vaciar log"><span data-icon="trash"></span></button>
+      </div>
+    </div>
+    <ol id="logList" class="log" aria-live="polite"></ol>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="shared.js"></script>
+  <script src="fs-store.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

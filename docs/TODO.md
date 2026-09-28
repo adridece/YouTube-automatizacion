@@ -1,29 +1,28 @@
-# Pendientes (por prioridad)
+# Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.0.0)
 
 ## P0 — bloquea el uso real
-1. **Prueba real de extremo a extremo** de la Fase 2 con la extensión (rango `1-2`, luego el lote). Nunca se ha completado una.
-   Resultado esperado: 2 vídeos `<prefijo>_001.mp4` y `_002.mp4`, ningún diálogo, sin imágenes descargadas.
-2. **Registro persistente y legible.** Hoy los mensajes salen en una cajita que se sobrescribe y el usuario no llega a leer
-   los errores. Guardar un log (últimas N líneas con hora y nº de escena) en `chrome.storage`, mostrarlo en un panel
-   desplazable en la página y en el popup, con botón "Copiar log" para pegárselo a Claude Code. Notificación del sistema al terminar/fallar.
-3. **Verificar el renombrado de descargas** con "Preguntar dónde guardar" desactivado (nombre final, carpeta `MundoFutFlow/`).
-   Decidir el formato del nombre (hoy `<prefijo>_<NNN>.mp4`; el usuario mencionó algo tipo `vid1`) y evitar choque
-   imagen/vídeo (`.png` vs `.mp4` ya no chocan, pero conviene un sufijo claro).
-4. **Límite de ritmo de Flow**: "Estás preguntando demasiado rápido…" (+ botón "Reintentar", que devuelve el mensaje a la caja).
-   Detectarlo, esperar con espera creciente y reenviar; nunca contarlo como fallo de escena.
-5. **Segundo plano**: comprobar que todo funciona con la pestaña no activa / ventana sin foco (Chrome limita temporizadores
-   y la lista virtualizada puede no pintar en pestañas ocultas). Recomendar una ventana propia para las dos pestañas de Flow.
-6. **Puntos diarios**: parar limpiamente cuando se acaben (≈5 vídeos/cuenta/día) con un mensaje claro y qué escenas quedaron sin hacer.
-   Investigar cómo se muestra el saldo/agotamiento en Flow.
+1. **Prueba real de extremo a extremo** con la v2 (rango `1-1` en una cuenta, luego `1-2`, luego el lote). Nunca se ha completado
+   una en Flow real. Pasos exactos y qué traer: README → "Primera prueba de la v2".
+2. **Carpeta elegida en Chrome real**: comprobar que (a) el selector de carpetas deja elegir el Escritorio, (b) el documento
+   offscreen puede escribir con el permiso concedido desde el panel, (c) qué pasa tras reiniciar Chrome (debería bastar
+   un clic en "Iniciar lote" → "Permitir"). Si (b) falla, la extensión cae sola a Descargas y lo dice en el log.
+3. **Cómo entrega Flow la descarga** (URL `blob:` o `https:`) y cuánto tarda 1080p: lo dice ahora el log
+   ("Chrome ha registrado la descarga #N (URL tipo …, a los X s)").
+4. **Identidad del tile de vídeo en Flow real** (`tileKey`): `tools/flow-diagnostic.js` → `cuadricula.primerosVideos` muestra qué
+   atributos/`src` tiene. Si el `src` cambia al recargar, tras un F5 la descarga de vídeos ya generados no encontrará su tile
+   (lo marca como fallo con mensaje claro).
+5. **Texto real de "sin puntos"** (hoy `FLOW_SIGNALS.noPoints` es [SUPUESTO]). Cuando pase, copiar el mensaje exacto de Flow.
+6. **Segundo plano de verdad**: más de 5 min con la pestaña oculta (Chrome aplica el frenado "intensivo") y si Flow pinta la lista
+   del "+" en una pestaña oculta. Recomendación actual: cada cuenta en su propia ventana, visible.
 
 ## P1 — mejora importante
-7. **Cuentas en paralelo** (hoy A y luego B): lanzar las dos pestañas a la vez para ahorrar la mitad del tiempo (ojo con el throttling).
-8. **Duplicados de nombre** (`001` dos veces tras reintentos): elegir el más reciente y verificarlo en la vista previa.
-9. Reintento de vídeo: la nota "reformula…" añadida al prompt en el 2º intento no está verificada.
-10. Comprobar que la resolución 1080p existe en la cuenta no-Pro (si no, caer a 720p y avisar).
-11. Reanudar tras recargar la página (estado del lote persistente) — hoy un F5 pierde el progreso.
+7. Si tras un F5 queda una escena en "revisar" y su vídeo sí apareció, ofrecer "asignar este vídeo" desde el panel.
+8. Opción de pedir al Agent que renombre cada vídeo (`V001`…) para encontrarlo por nombre como las imágenes (no probado: cuesta puntos probarlo).
+9. Reintento de vídeo: la nota "reformula…" añadida al prompt en el 2.º intento no está verificada en real.
+10. 1080p en la cuenta no-Pro: la extensión cae sola a 720p si no existe la opción (SIN VERIFICAR en real).
+11. Verificar el segundo intento de clic en "Aprobar" (`pressRow`) — solo se usa si el primero no tiene efecto.
 
-## P2 — limpieza
-12. Quitar `DOWNLOAD_URL` de `background.js`; opción "max" de resolución sin uso; unificar textos del popup.
-13. Tests de integración de `content.js` con DOM simulado (jsdom) — requiere separar más lógica pura de la que toca el DOM.
-14. Dejar de duplicar el algoritmo de espera en tres sitios (`waitUntil` + timeouts) en una utilidad única.
+## P2 — limpieza / calidad
+12. Escenario e2e para el turno por cuenta (`CLAIM`) y para "Detener" a mitad.
+13. Resumen del modo "solo imágenes" (cuenta las escenas como incompletas porque no hay vídeo).
+14. `labs.google` en el manifest: comprobar si sigue haciendo falta.
