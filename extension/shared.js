@@ -101,11 +101,11 @@ function parseRange(str) {
 // convivir como pestañas del MISMO perfil de Chrome bajo /u/0/, /u/1/,
 // /u/2/... — cada una necesita su propia configuración guardada, porque el
 // almacenamiento de la extensión se comparte por perfil, no por pestaña.
-// Si no encuentra el patrón (perfil de Chrome distinto, sin /u/N/ en la URL),
-// devuelve "default" para que siga funcionando igual que antes.
+// Si no hay /u/N/ en la URL, es la cuenta principal (= /u/0/).
 function getFlowAccountKey(url) {
   const m = (url || "").match(/\/u\/(\d+)(?:\/|$|\?)/);
-  return m ? `u${m[1]}` : "default";
+  // Sin /u/N/ en la URL es la cuenta principal de Google, que equivale a /u/0/.
+  return m ? `u${m[1]}` : "u0";
 }
 
 function autoRunStorageKey(url) {

@@ -77,6 +77,12 @@ const SCENARIOS = {
     u2: "seed=vid:2&prepMs=3000", u3: "seed=vid:1",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 0, u3: 0 }, files: FILES },
   },
+  dupcost: {
+    desc: "Tras aprobar, aparece un SEGUNDO aviso de coste (petición duplicada): debe rechazarse (no pagar dos veces)",
+    askWhereToSave: true, dest: "folder",
+    u2: "dupCost=1", u3: "",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, rejected: { u2: 2, u3: 0 } },
+  },
   noautodl: {
     desc: "Chrome SIN permiso de descargas automáticas para flow.google.com (exploración de la causa de tus descargas)",
     askWhereToSave: true, dest: "folder", noAutoDownloads: true,
@@ -279,10 +285,11 @@ async function main() {
   const server = https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, (req, res) => {
     if (req.url.startsWith("/video.mp4")) { res.setHeader("Content-Type", "video/mp4"); return res.end(video); }
     if (req.url.startsWith("/media/")) { res.statusCode = 404; return res.end(); }
+    if (req.url.startsWith("/vendor-prosemirror.js")) { res.setHeader("Content-Type", "text/javascript"); return res.end(fs.readFileSync(path.join(__dirname, "vendor-prosemirror.js"))); }
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "cost", "sequential", "dryrun", "dltest"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "cost", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));

@@ -1,6 +1,9 @@
 # Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.2.0)
 
 ## P0 — bloquea el uso real
+00. **v2.4 en real**: "PRUEBA de envío (0 puntos)" en cada cuenta mirando OTRA pestaña → el log dice qué método funcionó
+    (o por qué no). Si ninguno funciona sin foco, siguiente opción: mandar la entrada como usuario real con chrome.debugger
+    (Input.insertText / Input.dispatchMouseEvent), que muestra una barra "Cerezium está depurando este navegador".
 0. **v2.3 en real**: pulsar la cereza en cada pestaña de Flow → ¿aparece "lista · 2.º plano" y el icono de compartir?, ¿funciona el
    navegador del usuario con `chrome.tabCapture` (no tiene panel lateral: podría faltar también)? Luego lote mirando otra pestaña.
 0b. **v2.2 en real**: (a) con el usuario en otra pestaña, ¿terminan los vídeos? (page-hook "despierto"); (b) ¿renombra el Agent

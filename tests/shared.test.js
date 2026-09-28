@@ -63,7 +63,8 @@ test("getFlowAccountKey / autoRunStorageKey", () => {
   assert.strictEqual(S.getFlowAccountKey("https://flow.google.com/u/2"), "u2");
   assert.strictEqual(S.getFlowAccountKey("https://flow.google.com/u/12/project/x"), "u12");
   assert.strictEqual(S.getFlowAccountKey("https://flow.google.com/u/3?x=1"), "u3");
-  assert.strictEqual(S.getFlowAccountKey("https://flow.google.com/"), "default");
+  assert.strictEqual(S.getFlowAccountKey("https://flow.google.com/"), "u0");
+  assert.strictEqual(S.getFlowAccountKey("https://flow.google.com/project/abc"), "u0");
   assert.strictEqual(S.autoRunStorageKey("https://flow.google.com/u/3/project/z"), "autoRunConfig_u3");
 });
 

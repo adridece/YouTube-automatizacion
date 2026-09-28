@@ -55,11 +55,22 @@
   </form>
 </flow-agent-panel>
 <div class="cdk-overlay-container" id="overlay"></div>
+<script src="/vendor-prosemirror.js"></script>
 <script>
 const P = new URLSearchParams(location.search);
 const T = { image: +(P.get("imageMs") || 1500), video: +(P.get("videoMs") || 3000), prep: +(P.get("prepMs") || 2500), rename: 1200 };
 const grid = document.getElementById("grid"), chat = document.getElementById("chat"), overlay = document.getElementById("overlay");
-const editor = document.getElementById("editor"), attachRow = document.getElementById("attachRow");
+let editor = document.getElementById("editor"); const attachRow = document.getElementById("attachRow");
+// pm=1: la caja es un editor ProseMirror REAL (como el de Flow) y "generar" lee
+// el texto de SU MODELO, no del DOM (si el modelo está vacío, no envía nada).
+let pmView = null;
+if (P.get("pm") && window.PM) {
+  const holder = editor.parentNode; editor.remove();
+  pmView = new PM.EditorView(holder, { state: PM.EditorState.create({ schema: PM.schema }) });
+  editor = pmView.dom;
+}
+const promptText = () => (pmView ? pmView.state.doc.textContent : editor.textContent).trim();
+const clearPrompt = () => { if (pmView) pmView.dispatch(pmView.state.tr.delete(0, pmView.state.doc.content.size)); else editor.textContent = ""; };
 const assets = []; // más recientes primero: { name, kind, tile }
 let videoSends = 0;
 const blockedOnce = new Set();
@@ -85,17 +96,28 @@ function addTile(tag, name, src) {
 }
 const bump = (k) => sessionStorage.setItem(k, String(+(sessionStorage.getItem(k) || 0) + 1));
 
+// sendNeeds=enter: Flow simulado que IGNORA el clic/submit y solo envía con Enter.
+window.__sends = 0;
 document.getElementById("form").addEventListener("submit", (e) => {
   e.preventDefault();
-  const text = editor.textContent.trim();
+  if (P.get("sendNeeds") === "enter") return;
+  doSend();
+});
+editor.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && P.get("sendNeeds") === "enter") { e.preventDefault(); doSend(); }
+}, true);
+function doSend() {
+  const text = promptText();
   const att = [...attachRow.children].map((a) => a.dataset.label);
   if (!text) return;
+  window.__sends = (window.__sends || 0);
   const u = document.createElement("div"); u.className = "msg user"; u.textContent = (att.length ? `[📎 ${att.join(",")}] ` : "") + text; chat.appendChild(u);
-  editor.textContent = ""; attachRow.innerHTML = "";
+  clearPrompt(); attachRow.innerHTML = "";
   if (/^Crea todas las imágenes|^Las imágenes con identificador/.test(text)) return genImages(text);
+  window.__sends++;
   if (att.length) return askVideoCost(text, att);
   say("No entiendo (simulador).");
-});
+}
 
 function genImages(text) {
   const nums = [...text.matchAll(/\[(\d{3})\]/g)].map((m) => m[1]);
@@ -119,7 +141,10 @@ function askVideoCost(text, att) {
   videoSends++;
   if (P.get("rateLimitVideo") === String(videoSends)) { say('Estás preguntando demasiado rápido. Ve más despacio e inténtalo de nuevo. <button>Reintentar</button>'); return; }
   const cost = P.get("cost") ? +P.get("cost") : /6\s*seconds?/i.test(text) ? 10 : 15;
-  setTimeout(() => {
+  setTimeout(() => askVideoCostDialog(text, cost), 1200); // SIM: la IA "piensa"
+}
+function askVideoCostDialog(text, cost) {
+  {
     const m = document.createElement("flow-permission-message");
     m.className = "msg";
     m.innerHTML = `¿Quieres que empiece a generar 1 vídeo, que cuesta ${cost} puntos?` +
@@ -130,6 +155,8 @@ function askVideoCost(text, att) {
       if (l === "Rechazar") return say("He cancelado la generación del vídeo.");
       if (l === "Aprobar siempre") bump("mockApprovedAlways");
       bump("mockApproved");
+      // dupCost=1: simula una petición DUPLICADA: tras aprobar sale otro aviso de coste.
+      if (P.get("dupCost") && !m.dataset.dup) { const txt0 = text; setTimeout(() => { const d = askVideoCostDialog(txt0, cost); d.dataset.dup = "1"; }, 800); }
       sessionStorage.setItem("mockPendingVideo", "1");
       const p = addTile("flow-pending-tile");
       const wantName = (text.match(/cambia el nombre de este vídeo exactamente a: (\S+)\)/) || [])[1];
@@ -147,7 +174,8 @@ function askVideoCost(text, att) {
       }, T.video);
     }));
     chat.appendChild(m);
-  }, 1200); // SIM: la IA "piensa"
+    return m;
+  }
 }
 
 function finalizeVideo(wantName) {
