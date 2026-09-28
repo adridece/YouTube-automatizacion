@@ -54,10 +54,22 @@ const SCENARIOS = {
     expect: { u2: "done", u3: "done", scenes: { 1: "drs", 3: "ddd", 2: "ddd" }, approvals: { u2: 2, u3: 1 }, files: ["mundofut_002.mp4", "mundofut_003.mp4"] },
   },
   cost: {
-    desc: "u3 pide 15 puntos: se pulsa Rechazar, se para SOLO u3 y u2 sigue",
+    desc: "u3 pide SIEMPRE 15 puntos: Rechazar + 3 reenvíos remarcando 6 s; la escena falla y u2 sigue",
     askWhereToSave: true, dest: "folder",
     u2: "", u3: "cost=15",
-    expect: { u2: "done", u3: "error", scenes: { 1: "ddd", 2: "ddd", 3: "dfs" }, approvals: { u2: 2, u3: 0 }, files: ["mundofut_001.mp4", "mundofut_002.mp4"], rejected: { u3: 1 } },
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "dfs" }, approvals: { u2: 2, u3: 0 }, files: ["mundofut_001.mp4", "mundofut_002.mp4"], rejected: { u3: 4 } },
+  },
+  cost12: {
+    desc: 'u2: el 1.er vídeo sale a 12 puntos → Rechazar y reenviar remarcando 6 s → 10 → Aprobar. u3: el Agent llama a las imágenes "Imagen 003"',
+    askWhereToSave: true, dest: "folder",
+    u2: "costSeq=12,10", u3: "imgName=Imagen {n}",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, rejected: { u2: 1, u3: 0 }, chatHas: { u2: "ni uno más" } },
+  },
+  noconfirm: {
+    desc: "u2 con «Confirmar antes de generar = Nunca»: el vídeo empieza sin aviso → se termina ESE y se para de generar en u2 (sin reintentar)",
+    askWhereToSave: true, dest: "folder",
+    u2: "noConfirm=1", u3: "",
+    expect: { u2: "error", u3: "done", scenes: { 1: "ddd", 3: "ddd" }, approvals: { u2: 0, u3: 1 }, files: ["mundofut_001.mp4", "mundofut_003.mp4"], started: { u2: 1 } },
   },
   sequential: {
     desc: 'Modo "una tras otra": u3 no empieza hasta que termina u2',
@@ -133,6 +145,9 @@ async function runScenario(name, sc, server) {
     const panel = await ctx.newPage();
     await panel.setViewportSize({ width: 400, height: 1000 });
     await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
+    // v2.6: el icono abre la ventanita típica (el panel lateral estrechaba Flow).
+    const popup = await panel.evaluate(async () => { for (let i = 0; i < 20; i++) { const p = await chrome.action.getPopup({}); if (p) return p; await new Promise((r) => setTimeout(r, 200)); } return ""; });
+    check("el icono abre la ventanita de extensión (no el panel lateral)", /sidepanel\.html\?modo=popup$/.test(popup), popup);
     const openBg = async (url) => {
       const wait = ctx.waitForEvent("page", (p) => p.url().startsWith(url.split("?")[0]) || p.url() === "about:blank");
       await panel.evaluate((u) => chrome.tabs.create({ url: u, active: false }), url);
@@ -218,7 +233,7 @@ async function runScenario(name, sc, server) {
     await panel.screenshot({ path: path.join(OUT, `panel-log-${name}.png`) });
 
     const b2 = batches.batch_u2, b3 = batches.batch_u3;
-    const counts = async (p) => p.evaluate(() => ({ a: +(sessionStorage.getItem("mockApproved") || 0), always: +(sessionStorage.getItem("mockApprovedAlways") || 0), rejected: (document.getElementById("chat").textContent.match(/He cancelado la generación/g) || []).length }));
+    const counts = async (p) => p.evaluate(() => ({ a: +(sessionStorage.getItem("mockApproved") || 0), always: +(sessionStorage.getItem("mockApprovedAlways") || 0), started: +(sessionStorage.getItem("mockStarted") || 0), rejected: (document.getElementById("chat").textContent.match(/He cancelado la generación/g) || []).length, chat: document.getElementById("chat").textContent }));
     const c2 = await counts(u2), c3 = await counts(u3);
     const folder = b2 && b2.config.batchFolder;
     let files = {};
@@ -255,6 +270,8 @@ async function runScenario(name, sc, server) {
     }
     check('"Aprobar" pulsado una vez por vídeo, nunca "Aprobar siempre"', c2.a === E.approvals.u2 && c3.a === E.approvals.u3 && c2.always + c3.always === 0, `u2=${c2.a} u3=${c3.a} siempre=${c2.always + c3.always}`);
     if (E.rejected) check('"Rechazar" pulsado las veces esperadas', c3.rejected === (E.rejected.u3 || 0) && c2.rejected === (E.rejected.u2 || 0), `u2 rechazos=${c2.rejected} u3 rechazos=${c3.rejected}`);
+    if (E.started) check("vídeos que Flow empezó a generar", c2.started === (E.started.u2 || 0), `u2=${c2.started}`);
+    if (E.chatHas) check(`el reenvío remarca la duración ("${E.chatHas.u2}")`, c2.chat.includes(E.chatHas.u2));
     check("las dos cuentas usan la MISMA carpeta nueva del lote", folder && b3 && b3.config.batchFolder === folder, folder);
     const names = Object.keys(files).sort();
     check(`archivos en ${sc.dest === "folder" ? "la carpeta elegida" : "Descargas/MundoFutFlow/<lote>"}: ${E.files.join(", ")}`, JSON.stringify(names) === JSON.stringify([...E.files].sort()) && names.every((f) => files[f] === 350000), JSON.stringify(files));
@@ -289,7 +306,7 @@ async function main() {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "cost", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));

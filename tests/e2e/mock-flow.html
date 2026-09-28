@@ -11,6 +11,9 @@
   Parámetros (query string): policyImage=N (la imagen N se bloquea la 1ª vez),
   rateLimitVideo=K (el K-ésimo envío de vídeo responde "demasiado rápido"),
   cost=15 (coste pedido), videoMs, imageMs, prepMs (preparación de la descarga).
+  costSeq=12,10 (coste de cada envío de vídeo por orden; después, el normal),
+  imgName=Imagen {n} (cómo renombra el Agent las imágenes; por defecto "{n}"),
+  noConfirm=1 (como «Confirmar antes de generar = Nunca»: genera sin aviso de coste).
 -->
 <style>
   body { margin: 0; font: 13px system-ui, sans-serif; background: #111; color: #ddd; display: flex; height: 100vh; }
@@ -138,7 +141,8 @@ function genImages(text) {
       window.__blocks = window.__blocks || {};
       if (P.get("policyImage") === String(+n) && (window.__blocks[n] || 0) < times) { window.__blocks[n] = (window.__blocks[n] || 0) + 1; say(`[${n}]: Esta generación fue bloqueada por nuestras políticas de seguridad.`); return; }
       const t = addTile("flow-image-tile", "caricature " + uid());
-      setTimeout(() => { t.querySelector(".footer-title").textContent = n; assets.unshift({ name: n, kind: "Imagen", tile: t }); }, T.rename);
+      const nm = (P.get("imgName") || "{n}").replace("{n}", n);
+      setTimeout(() => { t.querySelector(".footer-title").textContent = nm; assets.unshift({ name: nm, kind: "Imagen", tile: t }); }, T.rename);
     });
   }, T.image);
 }
@@ -146,7 +150,10 @@ function genImages(text) {
 function askVideoCost(text, att) {
   videoSends++;
   if (P.get("rateLimitVideo") === String(videoSends)) { say('Estás preguntando demasiado rápido. Ve más despacio e inténtalo de nuevo. <button>Reintentar</button>'); return; }
-  const cost = P.get("cost") ? +P.get("cost") : /6\s*seconds?/i.test(text) ? 10 : 15;
+  const seq = (P.get("costSeq") || "").split(",").filter(Boolean).map(Number);
+  const cost = seq[videoSends - 1] || (P.get("cost") ? +P.get("cost") : /6\s*seconds?/i.test(text) ? 10 : 15);
+  window.__lastVideoPrompt = text;
+  if (P.get("noConfirm")) { setTimeout(() => startVideo(text), 1200); return; }
   setTimeout(() => askVideoCostDialog(text, cost), 1200); // SIM: la IA "piensa"
 }
 function askVideoCostDialog(text, cost) {
@@ -163,6 +170,15 @@ function askVideoCostDialog(text, cost) {
       bump("mockApproved");
       // dupCost=1: simula una petición DUPLICADA: tras aprobar sale otro aviso de coste.
       if (P.get("dupCost") && !m.dataset.dup) { const txt0 = text; setTimeout(() => { const d = askVideoCostDialog(txt0, cost); d.dataset.dup = "1"; }, 800); }
+      startVideo(text);
+    }));
+    chat.appendChild(m);
+    return m;
+  }
+}
+function startVideo(text) {
+  {
+      bump("mockStarted");
       sessionStorage.setItem("mockPendingVideo", "1");
       const p = addTile("flow-pending-tile");
       const wantName = (text.match(/cambia el nombre de este vídeo exactamente a: (\S+)\)/) || [])[1];
@@ -178,9 +194,6 @@ function askVideoCostDialog(text, cost) {
           requestAnimationFrame(() => { if (!stuck.isConnected) return; clearInterval(iv); stuck.remove(); sessionStorage.setItem("mockPendingVideo", "0"); finalizeVideo(wantName); });
         }, 500);
       }, T.video);
-    }));
-    chat.appendChild(m);
-    return m;
   }
 }
 
