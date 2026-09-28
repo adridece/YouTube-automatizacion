@@ -91,7 +91,10 @@ async function applyUiMode() {
     try {
       // En algunos navegadores basados en Chromium la API existe pero falla
       // ("SidePanel API not available", visto en el del usuario): ventanita.
-      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+      // El clic en la cereza lo recibe la extensión (action.onClicked), que abre
+      // el panel ella misma: así cada clic también PREPARA la pestaña en la que
+      // se pulsa (Chrome solo da permiso de captura en ese momento).
+      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
       await chrome.action.setPopup({ popup: "" });
     } catch (e) {
       blog("info", `Este navegador no tiene panel lateral para extensiones (${e.message}): al pulsar el icono se abrirá la ventanita.`);
@@ -105,13 +108,21 @@ async function applyUiMode() {
 applyUiMode().catch(() => {});
 chrome.runtime.onStartup.addListener(() => applyUiMode().catch(() => {}));
 
-// Solo llega aquí si NO hay ventanita configurada y Chrome no abrió el panel
-// lateral por sí mismo: se intenta abrir a mano y, si falla, se pasa al modo
-// ventanita para las siguientes veces.
+// Clic en la cereza (o Alt+Shift+C) en modo panel lateral: (1) abre el panel
+// y (2) si la pestaña es de Flow, la PREPARA para segundo plano. Si el panel
+// no se puede abrir, se pasa al modo ventanita para las siguientes veces.
 chrome.action.onClicked.addListener(async (tab) => {
+  // Se llama a open() sin esperar a nada antes: Chrome exige que sea
+  // inmediato tras el clic.
+  const opening = sidePanelSupported() ? chrome.sidePanel.open({ windowId: tab.windowId }) : Promise.reject(new Error("este navegador no tiene panel lateral para extensiones"));
+  if (/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || "")) {
+    armTab(tab.id).then((r) => {
+      if (!r.ok) blog("warn", `No pude preparar la pestaña de ${r.acc || "Flow"} para segundo plano: ${r.error}`, { acc: r.acc || null, phase: "setup" });
+      chrome.runtime.sendMessage({ type: "ARMED_EVENT", ok: r.ok, already: !!r.already, acc: r.acc, error: r.error || null }).catch(() => {});
+    });
+  }
   try {
-    if (!sidePanelSupported()) throw new Error("este navegador no tiene panel lateral para extensiones");
-    await chrome.sidePanel.open({ windowId: tab.windowId });
+    await opening;
   } catch (e) {
     blog("warn", `Tu navegador no deja abrir el panel lateral (${e.message}). A partir de ahora la extensión se abre en la ventanita de siempre al pulsar el icono.`);
     await chrome.storage.local.set({ [UI_KEY]: "popup" });

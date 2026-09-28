@@ -513,6 +513,18 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (prog) renderProgress();
 });
 
+// La extensión avisa cuando prepara (o no puede preparar) una pestaña de Flow
+// tras pulsar la cereza con el panel ya abierto.
+chrome.runtime.onMessage.addListener((msg) => {
+  if (!msg || msg.type !== "ARMED_EVENT") return false;
+  if (msg.ok && !msg.already) toast(`Pestaña ${String(msg.acc).replace("u", "/u/")}/ lista: seguirá trabajando aunque mires otra`);
+  else if (msg.ok && msg.already) toast(`Pestaña ${String(msg.acc).replace("u", "/u/")}/ ya estaba lista`);
+  else toast(`No pude preparar esta pestaña: ${msg.error}`);
+  refreshArmed().then(refreshDerived).catch(() => {});
+  return false;
+});
+chrome.tabs.onActivated.addListener(() => refreshArmed().then(refreshDerived).catch(() => {}));
+
 $("popOut").addEventListener("click", openFloating);
 $("popOut").hidden = MODO === "ventana";
 $("uiMode").addEventListener("change", async (e) => {
