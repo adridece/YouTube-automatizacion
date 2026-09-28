@@ -69,6 +69,11 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 - **[V] Coste según el prompt** (Omni 1.1 Flash, vídeo 9:16): con `6 seconds` en el prompt → **10 puntos**; con
   `… Duration: 6 seconds.` añadido al final → **10**; sin ninguna duración → **15**. Por eso `ensureVideoDuration`.
 - **[SUPUESTO]** Qué coste tienen otras duraciones (5, 8 s) y cómo escala con el modelo Veo.
+- **[V por el usuario, 28-sep, v2.5.0]** Aun con `Duration: 6 seconds` en el prompt, la IA a veces pide **12 puntos** (entendió otra
+  duración). Según el usuario, **al reenviar el prompt suele salir a 10**. Por eso v2.6 remarca los 6 s al principio y al final y,
+  si pide > 10, "Rechazar" + reenvío (hasta 3). Texto exacto del aviso de 12: [SUPUESTO] igual que el de 10 con otro número.
+- **[SUPUESTO, v2.6]** El Agent puede nombrar las imágenes de otra forma que `006` (la cuenta 2 dijo "faltan" aunque existían). El
+  log de v2.6 imprime los nombres que ve; cuando llegue, anotar aquí el formato real.
 
 ## Límites y errores del servicio
 - **[V]** "Estás preguntando demasiado rápido. Ve más despacio e inténtalo de nuevo." + botón "Reintentar" (devuelve el mensaje a la

@@ -1,6 +1,9 @@
-# Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.2.0)
+# Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.6.0)
 
 ## P0 — bloquea el uso real
+000. **v2.6 en real**: (a) el icono abre la ventanita (no el panel lateral) y la página de Flow no cambia de tamaño; (b) si un vídeo
+     pide 12 puntos, el log dice "lo he RECHAZADO… reenvío 1/3" y el reenvío sale a 10; (c) **log de la cuenta 2** cuando diga que
+     faltan imágenes: la línea "Nombres de imagen que veo en el proyecto: …" dirá cómo las llamó el Agent.
 00. **v2.4 en real**: "PRUEBA de envío (0 puntos)" en cada cuenta mirando OTRA pestaña → el log dice qué método funcionó
     (o por qué no). Si ninguno funciona sin foco, siguiente opción: mandar la entrada como usuario real con chrome.debugger
     (Input.insertText / Input.dispatchMouseEvent), que muestra una barra "Cerezium está depurando este navegador".
