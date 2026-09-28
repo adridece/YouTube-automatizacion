@@ -5,6 +5,13 @@
  * Funciones puras (parseo del kit, nombres, resúmenes…) en shared.js.
  */
 const $ = (id) => document.getElementById(id);
+// Dónde estamos: panel lateral, ventanita del icono (?modo=popup) o ventana flotante (?modo=ventana).
+const MODO = new URLSearchParams(location.search).get("modo") || "panel";
+document.documentElement.classList.add(`modo-${MODO}`);
+function openFloating() {
+  chrome.runtime.sendMessage({ type: "OPEN_PANEL" });
+  if (MODO === "popup") window.close();
+}
 
 // ------------------------------------------------------------- ICONOS
 const ICONS = {
@@ -28,6 +35,7 @@ const ICONS = {
   video: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/>',
   refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 5v6h-6"/>',
   alert: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18h.01"/>',
+  popout: '<path d="M14 4h6v6M20 4l-8 8"/><path d="M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/>',
 };
 function icon(name, size) {
   const s = size || 16;
@@ -75,7 +83,7 @@ TABS.forEach((t, i) => {
 
 // ------------------------------------------------------------ FORMULARIO
 const FORM_KEY = "fbrForm";
-const FIELDS = ["prompts", "accA_on", "accA_num", "accA_range", "accA_res", "accB_on", "accB_num", "accB_range", "accB_res", "nameFormat", "prefix", "genMode", "maxWait", "bringFront", "autoRun"];
+const FIELDS = ["prompts", "accA_on", "accA_num", "accA_range", "accA_res", "accB_on", "accB_num", "accB_range", "accB_res", "nameFormat", "prefix", "genMode", "maxWait", "autoRun"];
 function radio(name) { const r = document.querySelector(`input[name="${name}"]:checked`); return r ? r.value : null; }
 function setRadio(name, v) { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; }
 
@@ -180,6 +188,13 @@ async function refreshFolder() {
 }
 $("pickFolder").addEventListener("click", async (e) => {
   e.preventDefault();
+  if (MODO === "popup") {
+    // El selector de carpetas del sistema cierra la ventanita antes de
+    // terminar: se hace en la ventana flotante.
+    toast("Abro una ventana para elegir la carpeta…");
+    setTimeout(openFloating, 600);
+    return;
+  }
   try {
     const h = await window.showDirectoryPicker({ id: "fbr-dest", mode: "readwrite", startIn: "desktop" });
     await fbrSetRootHandle(h);
@@ -195,7 +210,10 @@ async function ensureFolderPermission() {
   const h = await fbrGetRootHandle();
   if (!h) return { ok: false, error: 'Elige primero la carpeta de destino (Salida → "Elegir").' };
   let p = await h.queryPermission({ mode: "readwrite" });
-  if (p !== "granted") p = await h.requestPermission({ mode: "readwrite" });
+  if (p !== "granted") {
+    if (MODO === "popup") return { ok: false, error: `Falta el permiso para escribir en "${h.name}". Pulsa el botón ↗ (arriba) y en esa ventana pulsa «Conceder acceso».` };
+    p = await h.requestPermission({ mode: "readwrite" });
+  }
   await refreshFolder();
   return p === "granted" ? { ok: true, name: h.name } : { ok: false, error: `Chrome no ha dado permiso para escribir en "${h.name}".` };
 }
@@ -214,7 +232,7 @@ function checklistItems() {
     { id: "confirm", t: "Flow: «Confirmar antes de generar» = Siempre", d: "Ajustes ⚙ → Configuración del agente. Así la extensión lee el coste y solo aprueba si es ≤ 10 puntos." },
     { id: "model", t: "Flow: vídeo con «Omni 1.1 Flash», 9:16 y x1", d: "Imagen y vídeo en 9:16 y cantidad x1. La extensión nunca toca el modelo." },
     { id: "project", t: "Un proyecto NUEVO y vacío en cada cuenta", d: "Si ya hay imágenes «001», «002»… se puede confundir de imagen." },
-    { id: "windows", t: "Cada cuenta en su propia ventana, visible", d: "No minimizada. En segundo plano Chrome frena la página y Flow puede no pintar listas." },
+    { id: "windows", t: "Deja abiertas las pestañas de Flow (puedes usar otras)", d: "Flow trabaja en segundo plano: no hace falta mirarlo. La extensión impide que Chrome descarte esas pestañas y que el ordenador se duerma mientras trabaja. No las cierres ni recargues." },
     { id: "autodl", t: "Si Chrome avisa de «descargar varios archivos», pulsa Permitir", d: 'En la prueba no hizo falta, pero si aparece ese aviso en Flow, Chrome retiene las descargas. <a href="#" data-open="chrome://settings/content/automaticDownloads">Abrir ajuste</a>' },
   ];
   if (dest === "downloads") items.push({ id: "askoff", t: "«Preguntar dónde guardar cada archivo» desactivado", d: 'Solo hace falta con este destino. <a href="#" data-open="chrome://settings/downloads">Abrir ajuste</a>' });
@@ -275,7 +293,6 @@ $("start").addEventListener("click", async () => {
   const batchId = String(now.getTime());
   const steps = accs.map((a) => ({
     accountKey: a.accountKey,
-    bringToFront: f.bringFront,
     run: {
       genMode: f.genMode,
       images: Object.fromEntries(images),
@@ -414,7 +431,7 @@ function renderLog() {
 }
 document.querySelectorAll('input[name="logFilter"]').forEach((r) => r.addEventListener("change", renderLog));
 function logText() {
-  return logToText(logEntries, `Flow Batch Runner v${chrome.runtime.getManifest().version} — log copiado ${new Date().toLocaleString()}`);
+  return logToText(logEntries, `Cerezium Autopilot v${chrome.runtime.getManifest().version} — log copiado ${new Date().toLocaleString()}`);
 }
 $("copyLog").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(logText()); toast(`Log copiado (${logEntries.length} líneas). Pégaselo a Claude.`); }
@@ -423,7 +440,7 @@ $("copyLog").addEventListener("click", async () => {
 $("saveLog").addEventListener("click", () => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([logText()], { type: "text/plain" }));
-  a.download = `flow-batch-log-${buildBatchFolderName(new Date(), "log")}.txt`;
+  a.download = `cerezium-log-${buildBatchFolderName(new Date(), "log")}.txt`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 });
@@ -444,8 +461,16 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (prog) renderProgress();
 });
 
+$("popOut").addEventListener("click", openFloating);
+$("popOut").hidden = MODO === "ventana";
+$("uiMode").addEventListener("change", async (e) => {
+  const r = await chrome.runtime.sendMessage({ type: "SET_UI_MODE", mode: e.target.value });
+  toast(r && r.mode === "popup" ? "Hecho: al pulsar el icono se abrirá la ventanita" : "Hecho: al pulsar el icono se abrirá el panel lateral");
+});
+
 (async function init() {
   hydrateIcons();
+  $("uiMode").value = (await chrome.storage.local.get("fbrUiMode")).fbrUiMode || (chrome.sidePanel ? "sidepanel" : "popup");
   $("version").textContent = `v${chrome.runtime.getManifest().version}`;
   await loadForm();
   checks = (await chrome.storage.local.get(CHECK_KEY))[CHECK_KEY] || {};

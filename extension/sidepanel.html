@@ -3,19 +3,23 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Flow Batch Runner</title>
+<title>Cerezium Autopilot</title>
+<link rel="icon" href="icons/icon-32.png" />
 <link rel="stylesheet" href="sidepanel.css" />
 </head>
 <body>
   <header class="top">
     <div class="brand">
-      <span class="logo" aria-hidden="true" data-icon="spark"></span>
+      <img class="logo" src="icons/cerezium.svg" alt="" />
       <div>
-        <h1>Flow Batch Runner</h1>
-        <p class="sub">MUNDO FUT · <span id="version"></span></p>
+        <h1>Cerezium <b>Autopilot</b></h1>
+        <p class="sub">Shorts en piloto automático · Google Flow · <span id="version"></span></p>
       </div>
     </div>
-    <span id="globalStatus" class="chip" role="status" aria-live="polite">Inactivo</span>
+    <div class="top-r">
+      <span id="globalStatus" class="chip" role="status" aria-live="polite">Inactivo</span>
+      <button type="button" id="popOut" class="icon-btn" title="Abrir en una ventana flotante" aria-label="Abrir en una ventana flotante"><span data-icon="popout"></span></button>
+    </div>
   </header>
 
   <nav class="tabs" role="tablist" aria-label="Secciones">
@@ -119,7 +123,13 @@
         </label>
         <label>Espera máx. por vídeo (min)<input id="maxWait" type="number" min="3" max="60" value="10" /></label>
       </div>
-      <label class="check"><input type="checkbox" id="bringFront" checked /> Poner cada pestaña de Flow al frente <b>dentro de su ventana</b> (no cambia de ventana)</label>
+      <label>Al pulsar el icono de la extensión, abrir
+        <select id="uiMode">
+          <option value="sidepanel">Panel lateral (se queda abierto junto a Flow)</option>
+          <option value="popup">Ventanita de extensión (se cierra al hacer clic fuera)</option>
+        </select>
+      </label>
+      <p class="hint">La extensión trabaja con Flow en segundo plano: nunca te cambia de pestaña.</p>
       <label class="check"><input type="checkbox" id="autoRun" /> Auto-inicio: lanzar solo este lote al abrir Flow en cada cuenta</label>
       <div class="row-btns">
         <button type="button" id="saveAuto" class="btn sm">Guardar auto-inicio</button>

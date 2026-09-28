@@ -1,5 +1,5 @@
 /*
- * MUNDO FUT / Flow Batch Runner — content script (corre dentro de flow.google.com)
+ * Cerezium Autopilot (antes "Flow Batch Runner") — content script (corre dentro de flow.google.com)
  * ---------------------------------------------------------------------------
  * Contexto completo: CLAUDE.md y docs/. Todo lo que se supone del DOM de Flow
  * está en docs/FLOW_DOM_FINDINGS.md ([V] verificado · [SUPUESTO] sin verificar).
@@ -213,11 +213,20 @@ async function writePrompt(text) {
   if (!ok) throw new Error("escribí el prompt pero no aparece en la caja de Flow");
 }
 
+// Busca en el menú flotante MÁS RECIENTE primero: con la pestaña en segundo
+// plano, un menú viejo puede tardar en retirarse (sus animaciones no avanzan)
+// y no queremos pulsar una opción suya.
 function findMenuItemByText(text) {
   const overlay = $(CONFIG.overlayContainerSelector);
   if (!overlay) return null;
   const wanted = text.toLowerCase();
-  return $$(CONFIG.menuItemSelector, overlay).find((el) => (el.textContent || "").trim().toLowerCase().includes(wanted)) || null;
+  const panes = $$(".cdk-overlay-pane", overlay);
+  const scopes = panes.length ? panes.reverse().concat([overlay]) : [overlay];
+  for (const scope of scopes) {
+    const hit = $$(CONFIG.menuItemSelector, scope).find((el) => (el.textContent || "").trim().toLowerCase().includes(wanted));
+    if (hit) return hit;
+  }
+  return null;
 }
 function pressEscape() {
   const opts = { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true };
@@ -240,7 +249,7 @@ function rightClickElement(el) {
   }));
 }
 function visibilityNote() {
-  return document.visibilityState === "visible" ? "" : " (la pestaña está OCULTA: Chrome puede no pintar las listas de Flow en segundo plano; déjala visible en su propia ventana)";
+  return document.visibilityState === "visible" ? "" : " (la pestaña estaba en segundo plano; si este fallo se repite, pásame el log: puede que Flow no pinte esa parte sin estar a la vista)";
 }
 
 // ============================================================== TILES
@@ -972,7 +981,7 @@ async function runBatch(cfg, resumeState) {
   send({ type: "HEARTBEAT", acc: ACC, on: true });
   ctxPhase = "setup";
   log("info", `${isResume ? "REANUDO" : "EMPIEZA"} el lote en ${ACC}: escenas ${batch.order.map(pad3).join(", ")} · modo ${cfg.genMode} · ${cfg.resolution} · nombres ${buildVideoFilename(cfg.nameFormat, cfg.prefix, batch.order[0] || 1)} · carpeta ${cfg.batchFolder} · pestaña ${document.visibilityState === "visible" ? "visible" : "OCULTA"}.`);
-  if (document.visibilityState !== "visible") log("warn", "Esta pestaña está oculta. Funciona con el latido de la extensión, pero Flow puede no pintar algunas listas en segundo plano: lo más fiable es dejar cada cuenta en su propia ventana, visible (no minimizada).");
+  if (document.visibilityState !== "visible") log("info", "La pestaña de Flow está en segundo plano: sigo trabajando igual (la extensión la mantiene despierta). Puedes seguir usando otras pestañas.");
   let label = "completo";
   try {
     const box = await tryWait(() => getPromptBox(), 30000, "la caja de prompt de Flow");
@@ -1143,6 +1152,7 @@ const ui = (() => {
       .card{width:340px;margin-bottom:8px;padding:12px;border-radius:14px;border:1px solid #3a3f4b;background:rgba(24,26,32,.97);color:#e8eaed;font-size:12px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
       .row{display:flex;align-items:center;justify-content:space-between;gap:8px}
       h2{margin:0;font-size:13px;font-weight:600}
+      .brand{display:flex;align-items:center;gap:6px}
       .bar{height:6px;border-radius:99px;background:#2d313b;overflow:hidden;margin:10px 0}
       .bar>i{display:block;height:100%;background:linear-gradient(90deg,#8ab4f8,#c58af9);transition:width .4s}
       .scenes{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
@@ -1193,9 +1203,9 @@ const ui = (() => {
           }).join("")
         : "";
       const lines = localLog.slice(-40).map((e) => `<div class="${e.level}">${esc(formatLogEntry(e))}</div>`).join("");
-      card = `<div class="card" role="region" aria-label="Flow Batch Runner">
+      card = `<div class="card" role="region" aria-label="Cerezium Autopilot">
         ${st.fatal ? `<div class="fatal" role="alert">${esc(st.fatal)}</div>` : ""}
-        <div class="row"><h2>Flow Batch · ${esc(ACC)}</h2><span>${pct}%</span></div>
+        <div class="row"><h2 class="brand"><svg viewBox="0 0 128 128" width="18" height="18" aria-hidden="true"><path d="M67 27C62 44 52 58 45 72M67 27C71 45 78 57 86 67" fill="none" stroke="#8fd9a8" stroke-width="7" stroke-linecap="round"/><path d="M67 27C74 15 90 12 101 19C93 31 78 34 67 27Z" fill="#43c07f"/><circle cx="44" cy="86" r="21" fill="#f0284f"/><circle cx="87" cy="81" r="21" fill="#f0284f"/></svg>Cerezium · ${esc(ACC)}</h2><span>${pct}%</span></div>
         <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
         <div class="scenes">${scenes || '<span style="color:#9aa0a6">Sin lote en esta cuenta.</span>'}</div>
         <div class="log" id="log" aria-live="polite">${lines || '<div style="color:#6f7480">El log aparecerá aquí.</div>'}</div>
@@ -1206,7 +1216,7 @@ const ui = (() => {
     }
     const cd = st.countdown ? `<div class="cd" role="alert"><span>${esc(st.countdown.text.replace("{s}", st.countdown.left))}</span><button id="cdGo">Ya</button><button id="cdNo">Cancelar</button></div>` : "";
     const focusedId = root.activeElement && root.activeElement.id;
-    wrap.innerHTML = `${cd}${card}<button class="pill ${lvl}" id="pill" aria-expanded="${st.expanded}" aria-label="Flow Batch Runner: ${esc(st.fatal || st.status)}"><span class="dot ${runningNow ? "run" : ""}"></span><span class="txt">${esc(st.fatal || st.status)}${p && runningNow ? ` · ${pct}%` : ""}</span></button>`;
+    wrap.innerHTML = `${cd}${card}<button class="pill ${lvl}" id="pill" aria-expanded="${st.expanded}" aria-label="Cerezium Autopilot: ${esc(st.fatal || st.status)}"><span class="dot ${runningNow ? "run" : ""}"></span><span class="txt">${esc(st.fatal || st.status)}${p && runningNow ? ` · ${pct}%` : ""}</span></button>`;
     const on = (id, fn) => { const el = root.getElementById(id); if (el) el.addEventListener("click", fn); };
     on("pill", () => { st.expanded = !st.expanded; render(); });
     on("min", () => { st.expanded = false; render(); });
@@ -1215,7 +1225,7 @@ const ui = (() => {
     on("copy", async () => {
       try {
         const all = (await chrome.storage.local.get("fbrLog")).fbrLog || localLog;
-        await navigator.clipboard.writeText(logToText(all, `Flow Batch Runner v${chrome.runtime.getManifest().version} — log`));
+        await navigator.clipboard.writeText(logToText(all, `Cerezium Autopilot v${chrome.runtime.getManifest().version} — log`));
         setStatus("Log copiado al portapapeles", "ok");
       } catch (e) { setStatus("No pude copiar el log: " + e.message, "error"); }
     });

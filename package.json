@@ -1,8 +1,8 @@
 {
-  "name": "flow-batch-runner",
-  "version": "2.0.1",
+  "name": "cerezium-autopilot",
+  "version": "2.1.0",
   "private": true,
-  "description": "Extensión de Chrome que automatiza Google Flow para producir Shorts en lote (MUNDO FUT / The Odd Ledger).",
+  "description": "Cerezium Autopilot: extensión de Chrome que automatiza Google Flow para producir Shorts en lote (MUNDO FUT / The Odd Ledger).",
   "engines": {
     "node": ">=18"
   },
@@ -10,7 +10,8 @@
     "test": "node --test tests/shared.test.js",
     "check": "for f in extension/*.js tests/*.js tools/*.js; do node --check \"$f\" || exit 1; done && node -e \"JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8')); console.log('manifest OK')\" && node tests/check-ids.js",
     "verify": "npm run check && npm test",
-    "zip": "cd extension && zip -r ../flow-batch-extension.zip . -x '.DS_Store'",
-    "e2e": "xvfb-run -a node tests/e2e/run-e2e.js"
+    "zip": "cd extension && zip -r ../cerezium-autopilot.zip . -x '.DS_Store'",
+    "e2e": "xvfb-run -a node tests/e2e/run-e2e.js",
+    "e2e:bg": "xvfb-run -a node tests/e2e/run-bg.js"
   }
 }

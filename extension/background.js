@@ -1,5 +1,5 @@
 /*
- * MUNDO FUT / Flow Batch Runner — service worker
+ * Cerezium Autopilot (antes "Flow Batch Runner") — service worker
  * ---------------------------------------------------------------------------
  * Hace de "centro" de la extensión:
  *  1. LOG persistente (chrome.storage.local "fbrLog"): todo lo que pasa, con
@@ -56,8 +56,8 @@ function notify(title, message, sticky) {
     `fbr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     {
       type: "basic",
-      iconUrl: chrome.runtime.getURL("icon.png"),
-      title: title || "Flow Batch Runner",
+      iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
+      title: title || "Cerezium Autopilot",
       message: String(message || "").slice(0, 400),
       priority: sticky ? 2 : 0,
       requireInteraction: !!sticky,
@@ -68,36 +68,65 @@ function notify(title, message, sticky) {
   );
 }
 
-// ---------------------------------------------------------- PANEL LATERAL
-function setupSidePanel() {
-  if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+// ------------------------------------------------ CÓMO SE ABRE LA INTERFAZ
+// Dos modos (panel de la extensión → Opciones avanzadas):
+//  - "sidepanel": panel lateral de Chrome, se queda abierto al lado de Flow.
+//  - "popup": la ventanita típica de extensión bajo el icono (se cierra al
+//    hacer clic fuera; no pasa nada: todo el estado está guardado).
+// Si el panel lateral no funciona en el navegador del usuario (v2.0.1: se le
+// abría como página completa), se pasa solo a "popup".
+const UI_KEY = "fbrUiMode";
+const POPUP_PAGE = "sidepanel.html?modo=popup";
+
+function sidePanelSupported() {
+  return !!(chrome.sidePanel && chrome.sidePanel.setPanelBehavior && chrome.sidePanel.open);
+}
+
+async function applyUiMode() {
+  const mode = (await chrome.storage.local.get(UI_KEY))[UI_KEY] || (sidePanelSupported() ? "sidepanel" : "popup");
+  if (mode === "popup" || !sidePanelSupported()) {
+    await chrome.action.setPopup({ popup: POPUP_PAGE });
+    if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+  } else {
+    await chrome.action.setPopup({ popup: "" });
     chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
   }
+  return mode;
 }
-setupSidePanel();
-chrome.runtime.onStartup.addListener(setupSidePanel);
+applyUiMode().catch(() => {});
+chrome.runtime.onStartup.addListener(() => applyUiMode().catch(() => {}));
 
-// Plan B: si Chrome no aplicó "abrir el panel al pulsar el icono" (visto en el
-// Chrome del usuario: el clic no hacía nada), se abre a mano.
-chrome.action.onClicked.addListener((tab) => {
-  openControlPanel(tab).catch(() => {});
+// Solo llega aquí si NO hay ventanita configurada y Chrome no abrió el panel
+// lateral por sí mismo: se intenta abrir a mano y, si falla, se pasa al modo
+// ventanita para las siguientes veces.
+chrome.action.onClicked.addListener(async (tab) => {
+  try {
+    if (!sidePanelSupported()) throw new Error("este navegador no tiene panel lateral para extensiones");
+    await chrome.sidePanel.open({ windowId: tab.windowId });
+  } catch (e) {
+    blog("warn", `Tu navegador no deja abrir el panel lateral (${e.message}). A partir de ahora la extensión se abre en la ventanita de siempre al pulsar el icono.`);
+    await chrome.storage.local.set({ [UI_KEY]: "popup" });
+    await applyUiMode();
+    try { await chrome.action.openPopup({ windowId: tab.windowId }); } catch (e2) { await openFloatingWindow(); }
+  }
 });
 
-// Abre el panel lateral; si Chrome no lo permite, lo abre como pestaña normal.
-async function openControlPanel(tab) {
-  try {
-    if (!chrome.sidePanel || !chrome.sidePanel.open) throw new Error("este Chrome no tiene chrome.sidePanel.open");
-    await chrome.sidePanel.open(tab && tab.windowId != null ? { windowId: tab.windowId } : { tabId: tab.id });
-    return "panel";
-  } catch (e) {
-    blog("warn", `No pude abrir el panel lateral (${e.message}); lo abro como pestaña.`);
-    await chrome.tabs.create({ url: chrome.runtime.getURL("sidepanel.html") });
-    return "tab";
+// Ventana pequeña flotante con la interfaz (para verla junto a Flow cuando no
+// hay panel lateral). Solo se abre cuando el usuario lo pide.
+const WIN_KEY = "fbrFloatWin";
+async function openFloatingWindow() {
+  const id = (await chrome.storage.session.get(WIN_KEY))[WIN_KEY];
+  if (id) {
+    const ok = await chrome.windows.update(id, { focused: true }).then(() => true, () => false);
+    if (ok) return "window";
   }
+  const w = await chrome.windows.create({ url: chrome.runtime.getURL("sidepanel.html?modo=ventana"), type: "popup", width: 440, height: 860 });
+  await chrome.storage.session.set({ [WIN_KEY]: w.id });
+  return "window";
 }
 
 chrome.runtime.onInstalled.addListener((d) => {
-  setupSidePanel();
+  applyUiMode().catch(() => {});
   blog("info", `Extensión ${d.reason === "install" ? "instalada" : "actualizada/recargada"} (v${VERSION}). Si tenías pestañas de Flow abiertas, pulsa F5 en ellas.`);
 });
 
@@ -110,11 +139,19 @@ async function getRunningTabs() {
   return d[HB_KEY] || {};
 }
 
+// Mientras una pestaña de Flow trabaja: (1) Chrome no puede descartarla por
+// "Ahorro de memoria" aunque esté en segundo plano, y (2) el ordenador no se
+// duerme (la pantalla sí puede apagarse). Se deshace al terminar.
 async function setRunningTab(tabId, acc, on) {
   const tabs = await getRunningTabs();
   if (on) tabs[tabId] = acc;
   else delete tabs[tabId];
   await chrome.storage.session.set({ [HB_KEY]: tabs });
+  chrome.tabs.update(Number(tabId), { autoDiscardable: !on }).catch(() => {});
+  if (chrome.power) {
+    if (Object.keys(tabs).length) chrome.power.requestKeepAwake("system");
+    else chrome.power.releaseKeepAwake();
+  }
   ensureHeartbeat();
 }
 
@@ -190,7 +227,7 @@ async function launchStep(step) {
   if (!/\/project\//.test(tab.url)) {
     blog("warn", `La pestaña de ${step.accountKey} no está dentro de un proyecto de Flow (${tab.url}). Abre un proyecto (mejor uno nuevo y vacío) antes de lanzar.`, { acc: step.accountKey });
   }
-  if (step.bringToFront) await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+  // Nunca se activa la pestaña de Flow: el usuario sigue usando el navegador.
   try {
     const r = await sendToTab(tab.id, { type: "START_RUN", ...step.run });
     if (r && r.ok === false) {
@@ -521,7 +558,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         return { ok: true };
       case "OPEN_PANEL":
-        return { ok: true, how: await openControlPanel(sender.tab) };
+        return { ok: true, how: await openFloatingWindow() };
+      case "SET_UI_MODE":
+        await chrome.storage.local.set({ [UI_KEY]: msg.mode === "popup" ? "popup" : "sidepanel" });
+        return { ok: true, mode: await applyUiMode() };
       case "FS_STATUS":
         return await offscreenCall({ type: "FS_STATUS" });
       default:
