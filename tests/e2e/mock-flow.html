@@ -98,9 +98,15 @@ const bump = (k) => sessionStorage.setItem(k, String(+(sessionStorage.getItem(k)
 
 // sendNeeds=enter: Flow simulado que IGNORA el clic/submit y solo envía con Enter.
 window.__sends = 0;
+// needsTrusted=1: solo acepta clics/teclas REALES (isTrusted); needsFocus=1: solo
+// envía si la página tiene el foco (lo que parece hacer Flow real, log v2.4.0).
+let lastClickTrusted = false;
+document.querySelector('flow-generate-icon-button button').addEventListener("click", (e) => { lastClickTrusted = e.isTrusted; }, true);
 document.getElementById("form").addEventListener("submit", (e) => {
   e.preventDefault();
   if (P.get("sendNeeds") === "enter") return;
+  if (P.get("needsTrusted") && !lastClickTrusted) return;
+  if (P.get("needsFocus") && !document.hasFocus()) return;
   doSend();
 });
 editor.addEventListener("keydown", (e) => {
