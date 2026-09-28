@@ -47,17 +47,17 @@ const SCENARIOS = {
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES },
   },
   resume: {
-    desc: "F5 en u2 con el vídeo 001 ya aprobado y generándose: se reanuda y NO se vuelve a pagar",
+    desc: "F5 en u2 con el vídeo 001 ya aprobado y generándose: se reanuda, NO se vuelve a pagar y el vídeo que llega tarde se asigna a la 001",
     askWhereToSave: true, dest: "folder",
     u2: "videoMs=9000", u3: "",
     reloadU2WhenApproved: true,
-    expect: { u2: "done", u3: "done", scenes: { 1: "drs", 3: "ddd", 2: "ddd" }, approvals: { u2: 2, u3: 1 }, files: ["mundofut_002.mp4", "mundofut_003.mp4"] },
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 3: "ddd", 2: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES },
   },
   cost: {
-    desc: "u3 pide SIEMPRE 15 puntos: Rechazar + 3 reenvíos remarcando 6 s; la escena falla y u2 sigue",
+    desc: "u3 pide SIEMPRE 15 puntos: Rechazar + 3 reenvíos remarcando 6 s, y otra vez en la 2.ª vuelta (8 rechazos, 0 puntos); la escena falla y u2 sigue",
     askWhereToSave: true, dest: "folder",
     u2: "", u3: "cost=15",
-    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "dfs" }, approvals: { u2: 2, u3: 0 }, files: ["mundofut_001.mp4", "mundofut_002.mp4"], rejected: { u3: 4 } },
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "dfs" }, approvals: { u2: 2, u3: 0 }, files: ["mundofut_001.mp4", "mundofut_002.mp4"], rejected: { u3: 8 } },
   },
   cost12: {
     desc: 'u2: el 1.er vídeo sale a 12 puntos → Rechazar y reenviar remarcando 6 s → 10 → Aprobar. u3: el Agent llama a las imágenes "Imagen 003"',
@@ -94,6 +94,24 @@ const SCENARIOS = {
     askWhereToSave: true, dest: "folder",
     u2: "dupCost=1", u3: "",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, rejected: { u2: 2, u3: 0 } },
+  },
+  misname: {
+    desc: "Prueba real v2.6: el Agent pone nombres EQUIVOCADOS a los vídeos y Flow los coloca en cualquier sitio: cada vídeo se descarga al generarse con su nombre y es el de SU escena",
+    askWhereToSave: true, dest: "folder",
+    u2: "wrongRename=1&shuffle=1", u3: "wrongRename=1&shuffle=1",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true },
+  },
+  selfheal: {
+    desc: 'Fallo técnico persistente en u2 (el "+" y "Animar" no responden): 2.ª vuelta automática y, si sigue, F5 automático y reanudación sin intervención',
+    askWhereToSave: true, dest: "folder", maxRetries: 2, timeoutMin: 9,
+    u2: "brokenUntilReload=1", u3: "",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, logHas: ["Segunda vuelta automática", "recarga automática 1/2", "Página recargada para recuperarme"] },
+  },
+  agentreply: {
+    desc: "El Agent contesta con una pregunta en vez de generar: a los 3 min sin actividad se apunta su respuesta y se reintenta solo",
+    askWhereToSave: true, dest: "folder", timeoutMin: 9,
+    u2: "agentQuestion=1", u3: "",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, logHas: ["el Agent contestó sin generar nada"] },
   },
   noautodl: {
     desc: "Chrome SIN permiso de descargas automáticas para flow.google.com (exploración de la causa de tus descargas)",
@@ -179,6 +197,7 @@ async function runScenario(name, sc, server) {
     await panel.check(`input[name=dest][value=${sc.dest}]`, { force: true });
     await panel.check(`input[name=runMode][value=${sc.runMode || "parallel"}]`, { force: true });
     await panel.evaluate((m) => { const el = document.getElementById("genMode"); el.value = m; el.dispatchEvent(new Event("change", { bubbles: true })); }, sc.genMode || "paired");
+    if (sc.maxRetries) await panel.evaluate((v) => { const el = document.getElementById("maxRetries"); el.value = String(v); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); }, sc.maxRetries);
     await sleep(500);
     await panel.screenshot({ path: path.join(OUT, `panel-lote-${name}.png`), fullPage: true });
     await panel.click("#start");
@@ -191,7 +210,7 @@ async function runScenario(name, sc, server) {
     let reloaded = false;
     let flowWentActive = false;
     let discardableWhileRunning = null;
-    while (Date.now() - t0 < 6 * 60000) {
+    while (Date.now() - t0 < (sc.timeoutMin || 6) * 60000) {
       batches = await panel.evaluate(() => chrome.storage.local.get(["batch_u2", "batch_u3"]));
       const b2 = batches.batch_u2, b3 = batches.batch_u3;
       if (!shotMid) {
@@ -233,7 +252,7 @@ async function runScenario(name, sc, server) {
     await panel.screenshot({ path: path.join(OUT, `panel-log-${name}.png`) });
 
     const b2 = batches.batch_u2, b3 = batches.batch_u3;
-    const counts = async (p) => p.evaluate(() => ({ a: +(sessionStorage.getItem("mockApproved") || 0), always: +(sessionStorage.getItem("mockApprovedAlways") || 0), started: +(sessionStorage.getItem("mockStarted") || 0), rejected: (document.getElementById("chat").textContent.match(/He cancelado la generación/g) || []).length, chat: document.getElementById("chat").textContent }));
+    const counts = async (p) => p.evaluate(() => ({ a: +(sessionStorage.getItem("mockApproved") || 0), always: +(sessionStorage.getItem("mockApprovedAlways") || 0), started: +(sessionStorage.getItem("mockStarted") || 0), multi: +(sessionStorage.getItem("mockMultiAttach") || 0), noimg: +(sessionStorage.getItem("mockVideoNoImage") || 0), rejected: (document.getElementById("chat").textContent.match(/He cancelado la generación/g) || []).length, chat: document.getElementById("chat").textContent }));
     const c2 = await counts(u2), c3 = await counts(u3);
     const folder = b2 && b2.config.batchFolder;
     let files = {};
@@ -270,11 +289,17 @@ async function runScenario(name, sc, server) {
     }
     check('"Aprobar" pulsado una vez por vídeo, nunca "Aprobar siempre"', c2.a === E.approvals.u2 && c3.a === E.approvals.u3 && c2.always + c3.always === 0, `u2=${c2.a} u3=${c3.a} siempre=${c2.always + c3.always}`);
     if (E.rejected) check('"Rechazar" pulsado las veces esperadas', c3.rejected === (E.rejected.u3 || 0) && c2.rejected === (E.rejected.u2 || 0), `u2 rechazos=${c2.rejected} u3 rechazos=${c3.rejected}`);
+    check("ningún vídeo pedido sin su imagen ni con dos imágenes adjuntas", c2.multi + c3.multi + c2.noimg + c3.noimg === 0, `sin imagen=${c2.noimg + c3.noimg} dobles=${c2.multi + c3.multi}`);
+    if (E.immediate) check("cada vídeo se descargó nada más generarse (sin pasada final de descargas)", !/Fase 2B: descargo/.test(logTxt) && (logTxt.match(/Guardado: /g) || []).length === 3);
+    if (E.logHas) for (const t of E.logHas) check(`el log dice "${t}"`, logTxt.includes(t));
     if (E.started) check("vídeos que Flow empezó a generar", c2.started === (E.started.u2 || 0), `u2=${c2.started}`);
     if (E.chatHas) check(`el reenvío remarca la duración ("${E.chatHas.u2}")`, c2.chat.includes(E.chatHas.u2));
     check("las dos cuentas usan la MISMA carpeta nueva del lote", folder && b3 && b3.config.batchFolder === folder, folder);
     const names = Object.keys(files).sort();
-    check(`archivos en ${sc.dest === "folder" ? "la carpeta elegida" : "Descargas/MundoFutFlow/<lote>"}: ${E.files.join(", ")}`, JSON.stringify(names) === JSON.stringify([...E.files].sort()) && names.every((f) => files[f] === 350000), JSON.stringify(files));
+    check(`archivos en ${sc.dest === "folder" ? "la carpeta elegida" : "Descargas/MundoFutFlow/<lote>"}: ${E.files.join(", ")}`, JSON.stringify(names) === JSON.stringify([...E.files].sort()), JSON.stringify(files));
+    // Cada vídeo simulado pesa 350000 + nº de SU escena (los que ya existían, 350000).
+    const sizeOk = (f) => files[f] === (sc.genMode === "downloadTest" ? 350000 : 350000 + parseInt(f.match(/_(\d{3})\./)[1], 10));
+    if (names.length) check("cada archivo es el vídeo de SU escena (no cruzados)", names.every(sizeOk), names.map((f) => `${f}=${files[f]}`).join(" "));
     check('ningún diálogo "Guardar como" pendiente', stuck.length === 0, `${downloads.length} descargas vistas, ${stuck.length} atascadas`);
     if (name === "folder" || name === "resume") check("sin ERRORes falsos en el log", !/ERROR: Chrome interrumpió/.test(logTxt));
     check("nunca se cambió la vista a una pestaña de Flow", !flowWentActive);
@@ -300,13 +325,18 @@ async function main() {
   const video = Buffer.alloc(350000, 7);
   const mock = fs.readFileSync(path.join(__dirname, "mock-flow.html"));
   const server = https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, (req, res) => {
-    if (req.url.startsWith("/video.mp4")) { res.setHeader("Content-Type", "video/mp4"); return res.end(video); }
+    if (req.url.startsWith("/video.mp4")) {
+      // Cada vídeo pesa 350000 + nº de su escena: así se comprueba que cada archivo es el de SU escena.
+      const sc = (req.url.match(/[?&]scene=(\d{3})/) || [])[1];
+      res.setHeader("Content-Type", "video/mp4");
+      return res.end(sc ? Buffer.alloc(350000 + parseInt(sc, 10), 7) : video);
+    }
     if (req.url.startsWith("/media/")) { res.statusCode = 404; return res.end(); }
     if (req.url.startsWith("/vendor-prosemirror.js")) { res.setHeader("Content-Type", "text/javascript"); return res.end(fs.readFileSync(path.join(__dirname, "vendor-prosemirror.js"))); }
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));

@@ -62,6 +62,7 @@ const CONFIG = {
   sentWaitMs: 8 * 60000, // si el mensaje ya se envió/aprobó: la IA piensa o hay cola
   imagesSettleMs: 40000, // el Agent renombra DESPUÉS de terminar (a veces tarda)
   assetListWaitMs: 10000,
+  agentReplyIdleMs: 180000, // el Agent contestó y lleva 3 min sin hacer nada → se reintenta
   rateLimitMaxRetries: 4,
   download: { createdTimeoutMs: 180000, completeTimeoutMs: 300000, attempts: 3 },
   maxAttemptsPerScene: 6, // por defecto; se cambia en el panel (Opciones avanzadas)
@@ -82,6 +83,9 @@ class StopError extends Error { constructor() { super("stopped"); this.name = "S
 class NoPointsError extends Error { constructor(m) { super(m); this.name = "NoPointsError"; } }
 class CostError extends Error { constructor(m) { super(m); this.name = "CostError"; } }
 class TimeoutError extends Error { constructor(m) { super(m); this.name = "TimeoutError"; } }
+// Fallo técnico que suele arreglarse recargando Flow: se guarda el lote, se
+// hace F5 y la propia pestaña lo reanuda sola (máx. 2 veces por lote).
+class ReloadError extends Error { constructor(m) { super(m); this.name = "ReloadError"; } }
 
 // =================================================================== ENVÍO
 function send(msg) {
@@ -568,7 +572,26 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun, onlySend }) {
   if (!res) res = await tryWait(cond, CONFIG.startWaitMs, "que Flow empiece a generar");
   if (!res) {
     log("info", `${st.approved ? "Coste aprobado" : "Mensaje enviado"}; la IA está pensando o hay cola. Espero hasta ${Math.round(CONFIG.sentWaitMs / 60000)} min SIN volver a enviarlo.`);
-    res = await tryWait(cond, CONFIG.sentWaitMs, "que Flow empiece a generar (mensaje ya enviado)");
+    // Si el Agent CONTESTA algo (una pregunta, una duda…) y luego no hace nada
+    // durante 3 min, no se espera los 8 min enteros: se apunta lo que dijo y
+    // se reintenta (gratis: no ha generado nada).
+    const baseLen = norm(textBefore).length;
+    let lastLen = -1;
+    let stableSince = Date.now();
+    const condLong = () => {
+      const r = cond();
+      if (r || st.approved) return r;
+      const now = norm(agentPanelText());
+      if (now.length !== lastLen) { lastLen = now.length; stableSince = Date.now(); return null; }
+      // (el texto del prompt pasa de la caja al chat: se compensa; lo que crece es la respuesta)
+      if (now.length - baseLen > 60 && Date.now() - stableSince > CONFIG.agentReplyIdleMs) {
+        const at = tail ? now.lastIndexOf(tail) : -1;
+        const reply = (at >= 0 ? now.slice(at + tail.length) : now.slice(-220)).trim().slice(0, 300);
+        return { type: "agentReplied", error: `el Agent contestó sin generar nada: «${reply}»` };
+      }
+      return null;
+    };
+    res = await tryWait(condLong, CONFIG.sentWaitMs, "que Flow empiece a generar (mensaje ya enviado)");
     if (!res) res = { type: st.approved ? "approvedNoStart" : "noStart", error: "Flow no empezó a generar nada a tiempo" };
   }
   return { ...res, approved: st.approved, cost: st.cost, before, textBefore };
@@ -640,7 +663,7 @@ async function phaseImages(cfg, isResume) {
   for (let launch = 1; launch <= 3; launch++) {
     res = await sendWithRateLimit(() => writePrompt(instruction), { maxPoints: CONFIG.maxAllowedPointsImages });
     // Solo se reintenta si es SEGURO que el mensaje no salió (no duplicar imágenes).
-    if (!(res.notSent || res.type === "error") || launch === 3) break;
+    if (!(res.notSent || res.type === "error" || res.type === "agentReplied") || launch === 3) break;
     log("warn", `No se pudo lanzar la generación de imágenes (${res.error || res.type}). Reintento en 20 s (${launch + 1}/3).`);
     await sleep(20000);
     throwIfStopped();
@@ -648,6 +671,10 @@ async function phaseImages(cfg, isResume) {
   if (res.type === "cost") throw new CostError(`las imágenes pedían ${res.cost} puntos (límite de seguridad ${CONFIG.maxAllowedPointsImages}); lo rechacé`);
   if (res.type !== "started") {
     const why = res.error || `Flow respondió "${res.type}"`;
+    if ((res.notSent || res.type === "error") && (batch.autoReloads || 0) < 2) {
+      for (const n of todo) batch.scenes[n].image = "pending";
+      throw new ReloadError(`no se pudo lanzar la generación de imágenes (${why})`);
+    }
     for (const n of todo) await setStep(n, "image", "failed", { error: `no se pudo lanzar la generación de imágenes: ${why}` });
     log("error", `No se pudo lanzar la generación de imágenes: ${why}.`);
     return;
@@ -766,10 +793,53 @@ async function attachViaPlusMenu(label) {
   }
 }
 
+// La "caja" completa del Agent: el editor + los adjuntos + el botón generar.
+// Al adjuntar una imagen aparece ahí su miniatura [V]; se comprueba que la
+// caja haya cambiado (sin contar el texto) para no enviar NUNCA un prompt de
+// vídeo sin su imagen (el Agent podría generar y cobrar un vídeo sin ella).
+function composerEl() {
+  const box = getPromptBox();
+  if (!box) return null;
+  const btn = $(CONFIG.generateButtonSelector);
+  for (let p = box.parentElement; p; p = p.parentElement) {
+    if ((btn && p.contains(btn)) || p.tagName === "FLOW-AGENT-PANEL") return p;
+  }
+  return null;
+}
+// Se mide ANTES de escribir el texto (la caja está vacía), así que se cuenta
+// todo, también el editor, por si Flow metiera la miniatura dentro de él.
+function signatureOf(c) {
+  if (!c) return null;
+  const els = $$("*", c);
+  return { count: els.length, imgs: els.filter((e) => /^(IMG|VIDEO|CANVAS)$/.test(e.tagName)).length, html: els.reduce((a, e) => a + (e.children.length ? 0 : e.outerHTML.length), 0) };
+}
+function grew(before, now) {
+  if (!before || !now) return true; // sin referencia: no se puede comprobar
+  return now.count > before.count || now.imgs > before.imgs || now.html > before.html + 80;
+}
+function composerSignature() {
+  return { composer: signatureOf(composerEl()), panel: signatureOf($(CONFIG.agentPanelSelector)) };
+}
+// Se exige que la caja cambie; si no, que al menos cambie el panel del Agent
+// (por si Flow pinta la miniatura en otra parte del panel). Si no cambia
+// NADA, la imagen no se adjuntó y no se envía.
+async function verifyAttached(before, how) {
+  const ok = await tryWait(() => grew(before.composer, signatureOf(composerEl())), 6000, "la miniatura adjunta en la caja");
+  if (ok) return;
+  if (grew(before.panel, signatureOf($(CONFIG.agentPanelSelector)))) {
+    log("info", `Tras ${how} la caja no cambió, pero sí el panel del Agent: doy la imagen por adjuntada.`);
+    return;
+  }
+  throw new Error(`pulsé ${how} pero la imagen no aparece adjunta en el panel del Agent`);
+}
+
 async function attachReferenceImage(n) {
   const label = pad3(n);
+  await sleep(300); // que el editor termine de vaciarse antes de medir
+  const before = composerSignature();
   try {
     await attachViaPlusMenu(label);
+    await verifyAttached(before, '"Añadir a petición"');
     log("ok", `Imagen ${label} adjuntada con el menú "+".`);
     return;
   } catch (e) {
@@ -784,44 +854,218 @@ async function attachReferenceImage(n) {
   const item = await tryWait(() => findMenuItemByText(CONFIG.menuItemText.animate), 5000, 'la opción "Animar"');
   if (!item) { await closeOverlays(); throw new Error('no encuentro "Animar" en el menú contextual de la imagen'); }
   clickDeep(item);
-  await sleep(800);
+  await verifyAttached(before, '"Animar"');
   log("ok", `Imagen ${label} adjuntada con "Animar" (plan B).`);
 }
 
 // ============================================================ FASE 2A: VÍDEOS
-// Espera al vídeo de la escena. Preferencia: el tile que el Agent ha
-// RENOMBRADO con el nombre pedido (robusto aunque Flow redibuje el tile o
-// tarde en terminar). Si en 30 s desde que hay un vídeo nuevo terminado no
-// aparece el nombre, se usa ese vídeo nuevo (método anterior).
-async function waitForSceneVideo(sendRes, maxWaitMs, wantedName) {
-  const assigned = batch.order.map((m) => batch.scenes[m].videoKey).filter(Boolean);
-  let freshReadySince = 0;
+// v2.7 (prueba real v2.6: el Agent NO renombra bien los vídeos aunque se le
+// pida, y al final no se sabía cuál era cuál). Ahora:
+//  - el vídeo de una escena es el tile NUEVO que aparece después de aprobar
+//    ESE vídeo (diferencia de tiles antes/después; nada de nombres);
+//  - se DESCARGA EN ESE MISMO MOMENTO con su nombre <prefijo>_<NNN>.mp4,
+//    antes de pedir el siguiente: nunca hay que buscarlo luego entre todos.
+async function waitForSceneVideo(sendRes, maxWaitMs) {
+  const assigned = () => batch.order.map((m) => batch.scenes[m].videoKey).filter(Boolean);
   let lastInProgressNote = 0;
-  const r = await tryWait(() => {
+  let readyKey = null;
+  let readySince = 0;
+  const cond = () => {
     rejectStrayCostDialogs("mientras se generaba el vídeo");
     const sig = detectNewSignals(sendRes.textBefore, agentPanelText());
     if (sig.policy) return { error: "policy" };
-    if (wantedName) {
-      const named = videoTilesByTitle(wantedName).filter(tileReady);
-      if (named.length) return { key: tileKey(named[0]), el: named[0], named: true, count: named.length };
-    }
-    const fresh = newVideoTiles(sendRes.before).filter((t) => !assigned.includes(tileKey(t)));
-    const bad = fresh.find((t) => /no se ha podido generar/i.test(t.textContent || ""));
-    if (bad) return { error: "genError" };
+    const taken = assigned();
+    const fresh = newVideoTiles(sendRes.before).filter((t) => !taken.includes(tileKey(t)));
+    if (fresh.find((t) => /no se ha podido generar/i.test(t.textContent || ""))) return { error: "genError" };
     if (sig.genError && !fresh.length) return { error: "genError" };
     const ready = fresh.filter(tileReady);
     if (fresh.length && !ready.length && Date.now() - lastInProgressNote > 60000) {
       lastInProgressNote = Date.now();
       log("info", `El vídeo aún se está procesando en Flow (${(fresh[0].textContent || "").match(/\d{1,3}\s?%/) || "sin %"})…`);
     }
-    if (!ready.length) { freshReadySince = 0; return null; }
-    if (!freshReadySince) freshReadySince = Date.now();
-    if (wantedName && Date.now() - freshReadySince < 30000) return null; // damos tiempo al renombrado
-    const pick = pickNewVideoKey(ready.map(tileKey), assigned);
+    if (!ready.length) { readyKey = null; return null; }
+    const pick = pickNewVideoKey(ready.map(tileKey), taken);
+    // Se exige que el mismo tile siga "terminado" 3 s (no coger uno que
+    // Flow aún está pintando o que va a sustituir por otro).
+    if (pick.key !== readyKey) { readyKey = pick.key; readySince = Date.now(); return null; }
+    if (Date.now() - readySince < 3000) return null;
     const el = ready.find((t) => tileKey(t) === pick.key);
-    return { key: pick.key, el, ambiguous: pick.ambiguous, count: ready.length, named: false };
-  }, maxWaitMs, "el vídeo nuevo");
+    return el ? { key: pick.key, el, ambiguous: pick.ambiguous, count: ready.length } : null;
+  };
+  let r = await tryWait(cond, maxWaitMs, "el vídeo nuevo");
+  // Si se acaba la espera pero Flow sigue visiblemente generando (cola), se
+  // espera más en vez de dar el vídeo por perdido.
+  for (let ext = 1; !r && ext <= 2; ext++) {
+    const busy = $$(CONFIG.pendingTileTag).length > 0 || newVideoTiles(sendRes.before).some((t) => !tileReady(t));
+    if (!busy) break;
+    log("info", `Han pasado ${Math.round((maxWaitMs * ext) / 60000)} min y Flow sigue generando el vídeo (cola): espero ${Math.round(maxWaitMs / 60000)} min más (${ext}/2).`);
+    r = await tryWait(cond, maxWaitMs, "el vídeo nuevo (espera ampliada)");
+  }
   return r || { error: "timeout" };
+}
+
+// Motivo de fallo: "content" (Flow lo bloqueó o no pudo; no cobra), "cost"
+// (pedía > 10 y se rechazó; gratis), "tech" (no se pudo adjuntar/enviar…).
+// Todos son GRATIS: por eso se pueden reintentar solos.
+function sceneRetryable(n, cfg) {
+  const s = batch.scenes[n];
+  return s.video === "failed" && !s.videoApproved && s.image === "done" && !!(cfg.animations || {})[n] && s.failKind !== "noprompt";
+}
+
+async function processSceneVideo(n, cfg, maxWaitMs, pass) {
+  throwIfStopped();
+  ctxScene = n;
+  const s = batch.scenes[n];
+  if (["done", "review", "failed", "skipped", "nopoints"].includes(s.video)) return;
+  if (s.image !== "done") {
+    await setStep(n, "video", "skipped", { error: s.error || "no hay imagen de referencia" });
+    await setStep(n, "download", "skipped");
+    log("warn", "Sin imagen de referencia: salto el vídeo de esta escena.");
+    return;
+  }
+  const raw = (cfg.animations || {})[n];
+  if (!raw) {
+    await setStep(n, "video", "failed", { error: "el kit no trae prompt de animación para esta escena", failKind: "noprompt" });
+    await setStep(n, "download", "skipped");
+    log("error", "No hay prompt de animación para esta escena en el kit.");
+    return;
+  }
+  // Nunca dos vídeos generándose a la vez: si uno anterior (ya aprobado) sigue
+  // en marcha, se espera a que termine y se le asigna a SU escena. Así el
+  // vídeo nuevo que aparezca después es seguro de esta escena.
+  if (!cfg.dryRun) await settleBeforeSend(cfg, maxWaitMs);
+  // Lo más importante del coste: la DURACIÓN (6 s = 10 puntos). Se remarca al
+  // principio y al final, además del "6 seconds" dentro del propio prompt.
+  // (Ya NO se pide al Agent que renombre el vídeo: lo hacía mal y además
+  // mete ruido en el prompt.)
+  const buildPrompt = (strong) =>
+    `${buildDurationNote(CONFIG.videoSeconds, strong)}\n\n${ensureVideoDuration(raw, CONFIG.videoSeconds)}\n\n` +
+    `(Duración: ${CONFIG.videoSeconds} segundos exactos. Un solo vídeo.)`;
+  if (pass === 1 && ensureVideoDuration(raw, CONFIG.videoSeconds) !== raw) log("info", `Ajusto la duración del prompt a ${CONFIG.videoSeconds} s (de ella depende el coste: 6 s = 10 puntos).`);
+
+  let lastError = null;
+  let failKind = "tech";
+  let outcome = null;
+  let costRetries = 0;
+  let strongDuration = pass > 1;
+  let haltAfterScene = null;
+  let imageStillAttached = false; // el intento anterior no llegó a salir: su imagen sigue en la caja
+  const maxAttempts = Math.max(1, cfg.maxRetries || CONFIG.maxAttemptsPerScene);
+  for (let attempt = 1; attempt <= maxAttempts && !outcome && !haltAfterScene; attempt++) {
+    ui.setStatus(`Escena ${pad3(n)}: vídeo (intento ${attempt}/${maxAttempts}${pass > 1 ? ", 2.ª vuelta" : ""})`, "info");
+    await setStep(n, "video", "running", { videoApproved: false, error: null });
+    const base = buildPrompt(strongDuration);
+    const softenLevel = attempt + (pass > 1 ? 2 : 0);
+    const text = softenLevel === 1 ? base : `${base}\n\n${buildSoftenNote("video", softenLevel)}`;
+    if (attempt > 1) log("info", `Reintento ${attempt}/${maxAttempts}: pido al Agent el mismo vídeo con el prompt suavizado.`);
+    let res;
+    let inBox = false; // hay una imagen adjunta en la caja que aún no ha salido
+    try {
+      const t0 = Date.now();
+      res = await sendWithRateLimit(async (k, o) => {
+        const box = getPromptBox();
+        if (box && promptText()) setEditableValue(box, "");
+        if (o && o.rewriteOnly) {
+          // la imagen sigue en la caja: solo se reescribe el texto
+        } else if (k === 0 && imageStillAttached) {
+          log("info", "La imagen sigue adjunta del intento anterior (no llegó a salir): solo reescribo el texto.");
+        } else {
+          // (k > 0 = tras "demasiado rápido": el mensaje salió y la caja quedó vacía)
+          inBox = false;
+          await attachReferenceImage(n);
+        }
+        inBox = true;
+        await writePrompt(text);
+      }, { maxPoints: CONFIG.maxAllowedPointsPerVideo, dryRun: !!cfg.dryRun, onApproved: () => { s.videoApproved = true; saveBatch(); } });
+      // Si el mensaje salió, Flow vacía la caja (adjuntos incluidos).
+      imageStillAttached = !!(res && res.notSent);
+      inBox = false;
+
+      if (res.type === "dryRun") {
+        const okCost = res.cost !== null && res.cost <= CONFIG.maxAllowedPointsPerVideo;
+        log(okCost ? "ok" : "warn", `ENSAYO: todo llegó hasta el aviso de coste (${res.cost === null ? "coste ilegible" : res.cost + " puntos"}${okCost ? ", se habría aprobado" : ", NO se habría aprobado"}). He pulsado "Rechazar": 0 puntos gastados.`);
+        await setStep(n, "video", "skipped", { error: `ensayo: aviso de coste de ${res.cost} puntos rechazado a propósito` });
+        await setStep(n, "download", "skipped");
+        outcome = "dry";
+        break;
+      }
+      if (res.type === "cost") {
+        // Pedía más de 10 (p. ej. 12: la IA entendió otra duración). Se ha
+        // pulsado "Rechazar" (gratis) y se vuelve a pedir remarcando los 6 s.
+        const why = res.cost === null ? "no pude leer el coste" : `pedía ${res.cost} puntos (máximo ${CONFIG.maxAllowedPointsPerVideo})`;
+        costRetries++;
+        if (costRetries <= 3) {
+          log("warn", `El vídeo ${why}: lo he RECHAZADO (no cuesta nada) y lo vuelvo a pedir remarcando que dure ${CONFIG.videoSeconds} segundos (reenvío ${costRetries}/3).`);
+          strongDuration = true;
+          attempt--; // no cuenta como intento de "bloqueo por contenido"
+          await sleep(3000);
+          continue;
+        }
+        lastError = `${why} también tras 3 reenvíos remarcando la duración; no lo apruebo. Comprueba que el modelo de vídeo sigue en "Omni 1.1 Flash"`;
+        failKind = "cost";
+        log("error", `El vídeo ${lastError}.`);
+        break;
+      }
+      if (res.type === "started" && !res.approved && !cfg.dryRun) {
+        // Empezó a generar SIN aviso de coste: "Confirmar antes de generar"
+        // está en "Nunca" y no se puede comprobar que cueste 10. Se deja
+        // terminar ESTE vídeo y se para de generar en la cuenta.
+        haltAfterScene = 'Flow empezó a generar el vídeo SIN pedir confirmación de coste: el ajuste «Confirmar antes de generar» parece estar en «Nunca». Ponlo en «Siempre» (Ajustes ⚙ → Configuración del agente): así la extensión aprueba solo si cuesta 10 puntos';
+        log("error", haltAfterScene + ".");
+      }
+      if (res.type === "started") {
+        log("info", `Generando el vídeo… (espero hasta ${Math.round(maxWaitMs / 60000)} min, más si Flow sigue en cola)`);
+        const v = await waitForSceneVideo(res, maxWaitMs);
+        if (v.key) {
+          if (v.ambiguous) log("warn", `Aparecieron ${v.count} vídeos nuevos terminados a la vez; asigno a esta escena el más reciente. Revisa que sea el correcto.`);
+          videoElByScene.set(n, v.el);
+          await setStep(n, "video", "done", { videoKey: v.key, error: null, failKind: null });
+          log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s.`);
+          outcome = "done";
+        } else if (v.error === "timeout") {
+          lastError = `el coste se aprobó pero el vídeo no apareció en ${Math.round((Date.now() - t0) / 60000)} min`;
+          outcome = res.approved ? "review" : null;
+          failKind = "tech";
+        } else {
+          lastError = v.error === "policy" ? "Flow lo bloqueó por su política de contenido" : "Flow dice que no se ha podido generar (no se cobra)";
+          failKind = "content";
+          // Sin confirmación de coste no se reintenta: se generaría sin poder comprobar los puntos.
+          if (haltAfterScene) break;
+          log("warn", `${lastError}.${attempt < maxAttempts ? " Reintento suavizando el prompt." : ""}`);
+        }
+      } else if (res.type === "approvedNoStart") {
+        lastError = res.error || "el coste se aprobó pero no empezó ninguna generación";
+        outcome = "review";
+      } else {
+        lastError = res.error || ({ policy: "bloqueado por la política de contenido", genError: "Flow no pudo generarlo", cancelled: "el Agent canceló la generación", noStart: "no se llegó a enviar" }[res.type] || res.type);
+        failKind = ["policy", "genError", "cancelled", "agentReplied"].includes(res.type) ? "content" : "tech";
+        log("warn", `No salió: ${lastError}.${attempt < maxAttempts ? " Reintento." : ""}`);
+      }
+    } catch (e) {
+      if (e instanceof StopError || e instanceof NoPointsError || e instanceof CostError) throw e;
+      imageStillAttached = inBox;
+      lastError = e.message;
+      failKind = "tech";
+      log("warn", `Fallo en el intento ${attempt}: ${e.message}${visibilityNote()}`);
+      await closeOverlays();
+      if (s.videoApproved) outcome = "review";
+    }
+    if (!outcome && failKind === "tech" && attempt < maxAttempts) await sleep(5000); // que Flow se asiente
+  }
+  if (outcome === "dry") { await sleep(1500); return; }
+  if (outcome === "review") {
+    await setStep(n, "video", "review", { error: `${lastError}. No lo repito solo para no gastar puntos dos veces; al final del lote vuelvo a mirar si apareció`, reviewSince: Date.now() });
+    log("error", `Vídeo a REVISAR: ${lastError}. No lo repito para no cobrar dos veces; al final vuelvo a comprobar si apareció.`);
+  } else if (outcome !== "done") {
+    await setStep(n, "video", "failed", { error: lastError || "no se pudo generar", failKind });
+    await setStep(n, "download", "skipped");
+    log("error", `No se pudo generar el vídeo de la escena ${pad3(n)}: ${lastError}.${pass === 1 ? " Sigo con la siguiente y lo reintento solo al final (no cuesta puntos)." : ""}`);
+  } else if (!["dryRun", "imagesOnly"].includes(cfg.genMode)) {
+    // DESCARGA INMEDIATA: ahora sabemos seguro cuál es su vídeo.
+    await downloadScene(n, "video", cfg);
+  }
+  if (haltAfterScene) throw new CostError(haltAfterScene);
+  await sleep(1500);
 }
 
 async function phaseVideos(cfg) {
@@ -829,144 +1073,89 @@ async function phaseVideos(cfg) {
   batch.phase = "videos";
   await saveBatch();
   const maxWaitMs = Math.max(cfg.maxWaitMs || 0, 10 * 60000);
-  for (const n of batch.order) {
-    throwIfStopped();
-    ctxScene = n;
-    const s = batch.scenes[n];
-    if (["done", "review", "failed", "skipped", "nopoints"].includes(s.video)) continue;
-    if (s.image !== "done") {
-      await setStep(n, "video", "skipped", { error: s.error || "no hay imagen de referencia" });
-      await setStep(n, "download", "skipped");
-      log("warn", "Sin imagen de referencia: salto el vídeo de esta escena.");
-      continue;
-    }
-    const raw = (cfg.animations || {})[n];
-    if (!raw) {
-      await setStep(n, "video", "failed", { error: "el kit no trae prompt de animación para esta escena" });
-      await setStep(n, "download", "skipped");
-      log("error", "No hay prompt de animación para esta escena en el kit.");
-      continue;
-    }
-    const tileName = buildVideoTileName(cfg.prefix, n, cfg.batchFolder);
-    // Se pide al Agent que renombre el vídeo (como ya hace con las imágenes) para
-    // encontrarlo después por su nombre. No cambia la duración (ni el coste).
-    // Lo más importante del coste: la DURACIÓN (6 s = 10 puntos). Se remarca al
-    // principio y al final; además del "6 seconds" dentro del propio prompt.
-    const buildPrompt = (strong) =>
-      `${buildDurationNote(CONFIG.videoSeconds, strong)}\n\n${ensureVideoDuration(raw, CONFIG.videoSeconds)}\n\n` +
-      `(Duración: ${CONFIG.videoSeconds} segundos exactos. Cuando termine de generarse, cambia el nombre de este vídeo exactamente a: ${tileName})`;
-    const prompt = buildPrompt(false);
-    if (ensureVideoDuration(raw, CONFIG.videoSeconds) !== raw) log("info", `Ajusto la duración del prompt a ${CONFIG.videoSeconds} s (de ella depende el coste: 6 s = 10 puntos).`);
+  for (const n of batch.order) await processSceneVideo(n, cfg, maxWaitMs, 1);
 
-    let lastError = null;
-    let outcome = null;
-    let costRetries = 0;
-    let strongDuration = false;
-    let haltAfterScene = null;
-    const maxAttempts = Math.max(1, cfg.maxRetries || CONFIG.maxAttemptsPerScene);
-    for (let attempt = 1; attempt <= maxAttempts && !outcome && !haltAfterScene; attempt++) {
-      ui.setStatus(`Escena ${pad3(n)}: vídeo (intento ${attempt}/${maxAttempts})`, "info");
-      await setStep(n, "video", "running", { videoApproved: false, error: null });
-      const base = strongDuration ? buildPrompt(true) : prompt;
-      const text = attempt === 1 ? base : `${base}\n\n${buildSoftenNote("video", attempt)}`;
-      if (attempt > 1) log("info", `Reintento ${attempt}/${maxAttempts}: pido al Agent el mismo vídeo con el prompt suavizado.`);
-      let res;
-      try {
-        const t0 = Date.now();
-        res = await sendWithRateLimit(async (_n, o) => {
-          if (!(o && o.rewriteOnly)) {
-            const box = getPromptBox();
-            if (box && promptText()) setEditableValue(box, "");
-            await attachReferenceImage(n);
-          }
-          await writePrompt(text);
-        }, { maxPoints: CONFIG.maxAllowedPointsPerVideo, dryRun: !!cfg.dryRun, onApproved: () => { s.videoApproved = true; saveBatch(); } });
-
-        if (res.type === "dryRun") {
-          const okCost = res.cost !== null && res.cost <= CONFIG.maxAllowedPointsPerVideo;
-          log(okCost ? "ok" : "warn", `ENSAYO: todo llegó hasta el aviso de coste (${res.cost === null ? "coste ilegible" : res.cost + " puntos"}${okCost ? ", se habría aprobado" : ", NO se habría aprobado"}). He pulsado "Rechazar": 0 puntos gastados.`);
-          await setStep(n, "video", "skipped", { error: `ensayo: aviso de coste de ${res.cost} puntos rechazado a propósito` });
-          await setStep(n, "download", "skipped");
-          outcome = "dry";
-          break;
-        }
-        if (res.type === "cost") {
-          // Pedía más de 10 (p. ej. 12: la IA entendió otra duración). Se ha
-          // pulsado "Rechazar" (gratis) y se vuelve a pedir remarcando los 6 s.
-          const why = res.cost === null ? "no pude leer el coste" : `pedía ${res.cost} puntos (máximo ${CONFIG.maxAllowedPointsPerVideo})`;
-          costRetries++;
-          if (costRetries <= 3) {
-            log("warn", `El vídeo ${why}: lo he RECHAZADO (no cuesta nada) y lo vuelvo a pedir remarcando que dure ${CONFIG.videoSeconds} segundos (reenvío ${costRetries}/3).`);
-            strongDuration = true;
-            attempt--; // no cuenta como intento de "bloqueo por contenido"
-            await sleep(3000);
-            continue;
-          }
-          lastError = `${why} también tras 3 reenvíos remarcando la duración; no lo apruebo. Comprueba que el modelo de vídeo sigue en "Omni 1.1 Flash"`;
-          log("error", `El vídeo ${lastError}.`);
-          break;
-        }
-        if (res.type === "started" && !res.approved && !cfg.dryRun) {
-          // Empezó a generar SIN aviso de coste: "Confirmar antes de generar"
-          // está en "Nunca" y no se puede comprobar que cueste 10. Se deja
-          // terminar ESTE vídeo y se para de generar en la cuenta.
-          haltAfterScene = 'Flow empezó a generar el vídeo SIN pedir confirmación de coste: el ajuste «Confirmar antes de generar» parece estar en «Nunca». Ponlo en «Siempre» (Ajustes ⚙ → Configuración del agente): así la extensión aprueba solo si cuesta 10 puntos';
-          log("error", haltAfterScene + ".");
-        }
-        if (res.type === "started") {
-          log("info", `Generando el vídeo… (espero hasta ${Math.round(maxWaitMs / 60000)} min; con cola puede tardar)`);
-          const v = await waitForSceneVideo(res, maxWaitMs, tileName);
-          if (v.key) {
-            if (!v.named && v.ambiguous) log("warn", `Aparecieron ${v.count} vídeos nuevos terminados a la vez y el Agent no renombró ninguno como "${tileName}"; asigno el primero. Revisa que sea el correcto.`);
-            else if (!v.named) log("warn", `El Agent no renombró el vídeo como "${tileName}"; lo identifico por ser el vídeo nuevo.`);
-            videoElByScene.set(n, v.el);
-            await setStep(n, "video", "done", { videoKey: v.key, videoName: v.named ? tileName : null, error: null });
-            log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s${v.named ? ` y renombrado "${tileName}"` : ""}.`);
-            outcome = "done";
-          } else if (v.error === "timeout") {
-            lastError = `el coste se aprobó pero el vídeo no apareció en ${Math.round(maxWaitMs / 60000)} min`;
-            outcome = "review";
-          } else {
-            lastError = v.error === "policy" ? "Flow lo bloqueó por su política de contenido" : "Flow dice que no se ha podido generar (no se cobra)";
-            // Sin confirmación de coste no se reintenta: se generaría sin poder comprobar los puntos.
-            if (haltAfterScene) break;
-            log("warn", `${lastError}.${attempt < maxAttempts ? " Reintento suavizando el prompt." : ""}`);
-          }
-        } else if (res.type === "approvedNoStart") {
-          lastError = res.error || "el coste se aprobó pero no empezó ninguna generación";
-          outcome = "review";
-        } else {
-          lastError = res.error || ({ policy: "bloqueado por la política de contenido", genError: "Flow no pudo generarlo", cancelled: "el Agent canceló la generación", noStart: "no se llegó a enviar" }[res.type] || res.type);
-          log("warn", `No salió: ${lastError}.${attempt < maxAttempts ? " Reintento." : ""}`);
-        }
-      } catch (e) {
-        if (e instanceof StopError || e instanceof NoPointsError || e instanceof CostError) throw e;
-        lastError = e.message;
-        log("warn", `Fallo en el intento ${attempt}: ${e.message}${visibilityNote()}`);
-        await closeOverlays();
-        if (s.videoApproved) outcome = "review";
+  // SEGUNDA VUELTA automática: las escenas que fallaron sin cobrar (bloqueo,
+  // coste > 10 rechazado, no se pudo adjuntar/enviar) se intentan otra vez,
+  // con el prompt más suavizado y la duración remarcada.
+  if (!cfg.dryRun) {
+    const again = batch.order.filter((n) => sceneRetryable(n, cfg));
+    if (again.length) {
+      ctxScene = null;
+      log("warn", `Segunda vuelta automática para las escenas que fallaron (no costaron puntos): ${again.map(pad3).join(", ")}. Empiezo en 30 s.`);
+      await sleep(30000);
+      for (const n of again) {
+        throwIfStopped();
+        await setStep(n, "video", "pending", { error: null });
+        await setStep(n, "download", "pending");
+        await processSceneVideo(n, cfg, maxWaitMs, 2);
       }
     }
-    if (outcome === "dry") { await sleep(1500); continue; }
-    if (outcome === "review") {
-      await setStep(n, "video", "review", { error: `${lastError}. No lo repito solo para no gastar puntos dos veces: mira en Flow si se generó.` });
-      log("error", `Vídeo a REVISAR: ${lastError}. No lo repito para no cobrar dos veces.`);
-    } else if (outcome !== "done") {
-      await setStep(n, "video", "failed", { error: lastError || "no se pudo generar" });
-      await setStep(n, "download", "skipped");
-      log("error", `No se pudo generar el vídeo: ${lastError}. Sigo con la siguiente escena.`);
+    // Si aún quedan fallos TÉCNICOS (no se pudo adjuntar/enviar), se recarga
+    // la página (F5) y se reanuda solo: suele desatascar Flow. Máx. 2 veces.
+    const tech = batch.order.filter((n) => sceneRetryable(n, cfg) && batch.scenes[n].failKind === "tech");
+    if (tech.length && (batch.autoReloads || 0) < 2) {
+      for (const n of tech) { batch.scenes[n].video = "pending"; batch.scenes[n].download = "pending"; }
+      throw new ReloadError(`las escenas ${tech.map(pad3).join(", ")} fallaron por un problema técnico (adjuntar/enviar)`);
     }
-    if (haltAfterScene) throw new CostError(haltAfterScene);
-    await sleep(1500);
+  }
+  ctxScene = null;
+}
+
+let ignoredPending = 0; // tiles "generándose" que no terminan nunca: tras esperarlos una vez, no se vuelven a esperar
+async function settleBeforeSend(cfg, maxWaitMs) {
+  const n = ctxScene;
+  const pending = () => $$(CONFIG.pendingTileTag).length;
+  if (pending() > ignoredPending) {
+    log("info", "Flow aún está generando un vídeo anterior: espero a que termine antes de pedir este (así no se cruzan).");
+    const ok = await tryWait(() => pending() <= ignoredPending, maxWaitMs, "que termine el vídeo anterior");
+    if (!ok) {
+      ignoredPending = pending();
+      log("warn", `Hay ${ignoredPending} generación(es) que no terminan tras ${Math.round(maxWaitMs / 60000)} min; sigo sin esperarlas más.`);
+    }
+    await sleep(3000);
+  }
+  if (batch.order.some((m) => batch.scenes[m].video === "review")) await resolveReviewScenes(cfg);
+  ctxScene = n;
+  ctxPhase = "videos";
+}
+
+// Al final del lote: un vídeo "a revisar" (coste aprobado pero no apareció a
+// tiempo) puede haber aparecido después. Si hay tantos vídeos nuevos sin
+// dueño como escenas a revisar, se asignan (del más antiguo al más nuevo).
+async function resolveReviewScenes(cfg) {
+  const review = batch.order.filter((n) => batch.scenes[n].video === "review" && batch.scenes[n].videoApproved);
+  if (!review.length || !Array.isArray(batch.startVideoKeys)) return;
+  ctxPhase = "videos";
+  ctxScene = null;
+  if ($$(CONFIG.pendingTileTag).length > ignoredPending) {
+    const waitMs = Math.max(cfg.maxWaitMs || 0, 10 * 60000);
+    log("info", `Hay vídeos todavía generándose; espero a que terminen (hasta ${Math.round(waitMs / 60000)} min) para asignarlos a las escenas a revisar ${review.map(pad3).join(", ")}.`);
+    const ok = await tryWait(() => $$(CONFIG.pendingTileTag).length <= ignoredPending, waitMs, "que terminen los vídeos pendientes");
+    if (!ok) ignoredPending = $$(CONFIG.pendingTileTag).length;
+    await sleep(3000);
+  }
+  const taken = new Set(batch.order.map((m) => batch.scenes[m].videoKey).filter(Boolean));
+  const orphans = $$(CONFIG.videoTileTag).filter((t) => tileReady(t) && !/no se ha podido generar/i.test(t.textContent || "") && !batch.startVideoKeys.includes(tileKey(t)) && !taken.has(tileKey(t)));
+  if (orphans.length !== review.length) {
+    if (orphans.length) log("warn", `Hay ${orphans.length} vídeo(s) nuevo(s) sin escena y ${review.length} escena(s) a revisar: no los asigno solo para no cruzarlos. Revisa en Flow.`);
+    return;
+  }
+  // Flow pone los más recientes primero: el último de la lista es el más antiguo.
+  orphans.reverse();
+  for (let i = 0; i < review.length; i++) {
+    const n = review[i];
+    ctxScene = n;
+    videoElByScene.set(n, orphans[i]);
+    await setStep(n, "video", "done", { videoKey: tileKey(orphans[i]), error: null });
+    log("ok", `El vídeo de la escena ${pad3(n)} apareció más tarde: lo asigno${review.length > 1 ? " (por orden de llegada; revisa que sea el correcto)" : ""} y lo descargo.`);
+    if (batch.scenes[n].download !== "done") { await setStep(n, "download", "pending"); await downloadScene(n, "video", cfg); }
   }
   ctxScene = null;
 }
 
 // ======================================================= FASE 2B: DESCARGAS
 async function findVideoTileForScene(n) {
-  const name = batch.scenes[n].videoName || buildVideoTileName(batch.config.prefix, n, batch.config.batchFolder);
-  const byName = await findWithScroll(() => videoTilesByTitle(name).find(tileReady) || null, CONFIG.videoTileTag);
-  if (byName) return byName;
   const el = videoElByScene.get(n);
   if (el && el.isConnected) return el;
   const key = batch.scenes[n].videoKey;
@@ -1054,20 +1243,12 @@ async function downloadOne(n, tile, kind, cfg, mode) {
   }
 }
 
-async function phaseDownloads(cfg) {
-  ctxPhase = "downloads";
-  ctxScene = null;
-  batch.phase = "downloads";
-  await saveBatch();
-  const kind = cfg.genMode === "imagesOnly" ? "image" : "video";
-  const stepOf = (s) => (kind === "video" ? s.video : s.image);
-  for (const n of batch.order) {
-    const s = batch.scenes[n];
-    if (stepOf(s) !== "done" && s.download === "pending") await setStep(n, "download", "skipped");
-  }
-  const list = batch.order.filter((n) => stepOf(batch.scenes[n]) === "done" && batch.scenes[n].download !== "done");
-  if (!list.length) { log("info", "No hay nada que descargar."); return; }
 
+// Destino de las descargas: se decide una vez por lote (y se cambia solo a
+// "Descargas de Chrome" si la carpeta elegida deja de tener permiso).
+let destModeCache = null;
+async function resolveDestMode(cfg) {
+  if (destModeCache) return destModeCache;
   let mode = cfg.destMode === "folder" ? "folder" : "downloads";
   if (mode === "folder") {
     let fs = await send({ type: "FS_STATUS" });
@@ -1083,19 +1264,34 @@ async function phaseDownloads(cfg) {
   } else {
     log("info", `Destino: Descargas de Chrome → MundoFutFlow/${cfg.batchFolder}/`);
   }
+  destModeCache = mode;
+  return mode;
+}
 
-  log("info", `Fase 2B: descargo ${list.length} ${kind === "video" ? "vídeo(s)" : "imagen(es)"} de uno en uno.`);
-  for (const n of list) {
-    throwIfStopped();
-    ctxScene = n;
+// Descarga el vídeo (o imagen) de UNA escena, con reintentos. Nunca lanza
+// salvo "Detener": un fallo queda anotado en la escena y se reintenta en la
+// pasada final de descargas.
+async function downloadScene(n, kind, cfg) {
+  const prev = { scene: ctxScene, phase: ctxPhase };
+  ctxScene = n;
+  ctxPhase = "downloads";
+  try {
+    await resolveDestMode(cfg);
     ui.setStatus(`Escena ${pad3(n)}: descargando`, "info");
     await setStep(n, "download", "running");
     let lastErr = null;
     for (let attempt = 1; attempt <= CONFIG.download.attempts; attempt++) {
       try {
         const tile = kind === "video" ? await findVideoTileForScene(n) : await findWithScroll(() => findImageTileByLabel(pad3(n)), CONFIG.imageTileTag);
-        if (!tile) throw new Error(kind === "video" ? "no encuentro el tile del vídeo de esta escena (¿se recargó la página?). Descárgalo a mano" : "no encuentro la imagen");
-        const r = await downloadOne(n, tile, kind, cfg, mode);
+        if (!tile) throw new Error(kind === "video" ? "no encuentro el tile del vídeo de esta escena (¿se recargó la página?)" : "no encuentro la imagen");
+        // Último intento: si Flow no llegó a entregar el 1080p (lo "mejora" antes
+        // de descargar), se pide el 720p original para que al menos quede el vídeo.
+        let useCfg = cfg;
+        if (kind === "video" && attempt === CONFIG.download.attempts && cfg.resolution !== "720p" && /no registró ninguna descarga|no terminó/.test(lastErr || "")) {
+          useCfg = { ...cfg, resolution: "720p" };
+          log("warn", "Flow no entregó el 1080p en los intentos anteriores: pido la versión 720p (tamaño original) para no quedarme sin el vídeo.");
+        }
+        const r = await downloadOne(n, tile, kind, useCfg, destModeCache);
         if (!r.nameOk) {
           await setStep(n, "download", "review", { file: r.path, error: `se guardó con otro nombre: ${r.path}` });
           log("error", `Guardado pero con otro nombre: ${r.path}.`);
@@ -1103,26 +1299,50 @@ async function phaseDownloads(cfg) {
           await setStep(n, "download", "done", { file: r.path });
           log("ok", `Guardado: ${r.path}`);
         }
-        lastErr = null;
-        break;
+        return true;
       } catch (e) {
         if (e instanceof StopError) throw e;
         lastErr = e.message;
         await closeOverlays();
-        if (mode === "folder" && /permiso|carpeta de destino|no hay ninguna carpeta/i.test(e.message)) {
-          mode = "downloads";
+        if (destModeCache === "folder" && /permiso|carpeta de destino|no hay ninguna carpeta/i.test(e.message)) {
+          destModeCache = "downloads";
           log("error", `No puedo escribir en la carpeta elegida (${e.message}). Paso a guardar en Descargas/MundoFutFlow/${cfg.batchFolder}/ (si tienes "Preguntar dónde guardar" activado, Chrome preguntará).`);
           send({ type: "NOTIFY", title: "Sin permiso en la carpeta elegida", message: "Guardo en Descargas/MundoFutFlow. Abre el panel de la extensión y pulsa «Conceder acceso» para la próxima vez.", sticky: true });
         }
         log("warn", `Descarga fallida (intento ${attempt}/${CONFIG.download.attempts}): ${e.message}`);
         if (e.noRetry) break;
-        if (attempt < CONFIG.download.attempts) await sleep(3000);
+        if (attempt < CONFIG.download.attempts) await sleep(5000);
       }
     }
-    if (lastErr) {
-      await setStep(n, "download", "failed", { error: `no se pudo descargar: ${lastErr}` });
-      log("error", `No se pudo descargar tras ${CONFIG.download.attempts} intentos: ${lastErr}`);
-    }
+    await setStep(n, "download", "failed", { error: `no se pudo descargar: ${lastErr}` });
+    log("error", `No se pudo descargar la escena ${pad3(n)} (${lastErr}). Lo reintento al final del lote.`);
+    return false;
+  } finally {
+    ctxScene = prev.scene;
+    ctxPhase = prev.phase;
+  }
+}
+
+// Pasada final: descarga lo que no se descargó al generarse (modo "solo
+// imágenes", PRUEBA de descarga, reanudación tras F5 o un fallo anterior).
+async function phaseDownloads(cfg) {
+  ctxPhase = "downloads";
+  ctxScene = null;
+  batch.phase = "downloads";
+  await saveBatch();
+  const kind = cfg.genMode === "imagesOnly" ? "image" : "video";
+  const stepOf = (s) => (kind === "video" ? s.video : s.image);
+  for (const n of batch.order) {
+    const s = batch.scenes[n];
+    if (stepOf(s) !== "done" && ["pending", "failed"].includes(s.download)) await setStep(n, "download", "skipped");
+  }
+  const list = batch.order.filter((n) => stepOf(batch.scenes[n]) === "done" && !["done", "review"].includes(batch.scenes[n].download));
+  const already = batch.order.filter((n) => batch.scenes[n].download === "done").length;
+  if (!list.length) { log("info", already ? `Descargas: ${already} ya guardada(s) al generarse; no queda nada pendiente.` : "No hay nada que descargar."); return; }
+  log("info", `Fase 2B: descargo ${list.length} ${kind === "video" ? "vídeo(s)" : "imagen(es)"} pendiente(s) de uno en uno.`);
+  for (const n of list) {
+    throwIfStopped();
+    await downloadScene(n, kind, cfg);
   }
   ctxScene = null;
 }
@@ -1221,6 +1441,8 @@ async function runBatch(cfg, resumeState) {
     return { ok: false, error: claim.error };
   }
   stopRequested = false;
+  destModeCache = null;
+  ignoredPending = 0;
   const isResume = !!resumeState;
   batch = resumeState ? prepareResume(resumeState) : createBatchState({ batchId: cfg.batchId || String(Date.now()), accountKey: ACC, sceneNumbers: cfg.sceneNumbers, config: cfg });
   if (cfg.genMode === "dryRun") cfg.dryRun = true;
@@ -1232,6 +1454,7 @@ async function runBatch(cfg, resumeState) {
   log("info", `${isResume ? "REANUDO" : "EMPIEZA"} el lote en ${ACC}: escenas ${batch.order.map(pad3).join(", ")} · modo ${cfg.genMode} · ${cfg.resolution} · nombres ${buildVideoFilename(cfg.nameFormat, cfg.prefix, batch.order[0] || 1)} · carpeta ${cfg.batchFolder} · pestaña ${document.visibilityState === "visible" ? "visible" : "OCULTA"}${cfg.armed ? " · preparada para segundo plano ✓" : " · SIN preparar para segundo plano"}.`);
   if (!cfg.armed && document.visibilityState !== "visible") log("warn", "Esta pestaña está oculta y SIN preparar: Flow puede quedarse parado. Entra en ella y pulsa la cereza una vez (o Alt+Shift+C).");
   let label = "completo";
+  let reloading = false;
   setBackgroundMode(true);
   // Foco simulado (depurador): Flow solo acepta envíos si cree tener el foco.
   const dbg = await send({ type: "DBG_ON" });
@@ -1248,6 +1471,8 @@ async function runBatch(cfg, resumeState) {
       batch.status = "done";
       return { ok: true };
     }
+    // Vídeos que ya había antes del lote (para reconocer luego los nuevos).
+    if (!Array.isArray(batch.startVideoKeys)) { batch.startVideoKeys = $$(CONFIG.videoTileTag).map(tileKey); await saveBatch(); }
     if (["paired", "imagesOnly"].includes(cfg.genMode)) await phaseImages(cfg, isResume);
     if (cfg.genMode === "downloadTest") await pickExistingVideos();
     let halt = null;
@@ -1260,13 +1485,20 @@ async function runBatch(cfg, resumeState) {
         halt = e;
         markRemaining(e);
       }
+      if (!cfg.dryRun) await resolveReviewScenes(cfg);
     }
     await phaseDownloads(cfg);
     batch.status = halt ? (halt instanceof NoPointsError ? "nopoints" : "error") : "done";
     batch.phase = "done";
     if (halt) label = halt instanceof NoPointsError ? "sin puntos" : "coste no permitido";
   } catch (e) {
-    if (e instanceof StopError) {
+    if (e instanceof ReloadError) {
+      reloading = true;
+      batch.autoReloads = (batch.autoReloads || 0) + 1;
+      batch.status = "running";
+      label = null;
+      log("warn", `Recupero solo: ${e.message}. Recargo la página de Flow (F5) y sigo desde donde iba (recarga automática ${batch.autoReloads}/2).`);
+    } else if (e instanceof StopError) {
       batch.status = "stopped";
       label = "detenido";
       log("warn", "Lote detenido por el usuario.");
@@ -1286,8 +1518,15 @@ async function runBatch(cfg, resumeState) {
     await closeOverlays().catch(() => {});
     for (const n of batch.order) for (const step of ["image", "video", "download"]) if (batch.scenes[n][step] === "running") batch.scenes[n][step] = step === "video" && batch.scenes[n].videoApproved ? "review" : "pending";
     await saveBatch();
-    send({ type: "HEARTBEAT", acc: ACC, on: false });
-    await finishRun(label);
+    if (reloading) {
+      // Sin RUN_COMPLETE: el lote sigue "en marcha" y se reanuda al cargar.
+      batch.resumeNow = true;
+      await saveBatch();
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      send({ type: "HEARTBEAT", acc: ACC, on: false });
+      await finishRun(label);
+    }
   }
   return { ok: true };
 }
@@ -1353,7 +1592,13 @@ async function onPageLoad() {
   const b = d[BATCH_KEY];
   if (b) ui.setBatch(b);
   if (b && b.status === "running" && Date.now() - b.updatedAt < 12 * 3600 * 1000 && /\/project\//.test(location.href)) {
-    const go = await ui.countdown(15, "Hay un lote a medias en esta cuenta. Lo reanudo en {s} s…");
+    const auto = !!b.resumeNow; // recarga hecha por la propia extensión para recuperarse
+    if (auto) {
+      b.resumeNow = false;
+      await storageSet({ [BATCH_KEY]: b });
+      log("info", "Página recargada para recuperarme del fallo; reanudo el lote en 5 s.", { phase: "run", scene: null });
+    }
+    const go = await ui.countdown(auto ? 5 : 15, auto ? "Página recargada para recuperarme de un fallo. Sigo con el lote en {s} s…" : "Hay un lote a medias en esta cuenta. Lo reanudo en {s} s…");
     if (!go) {
       b.status = "stopped";
       await storageSet({ [BATCH_KEY]: b });

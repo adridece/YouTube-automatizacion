@@ -130,7 +130,7 @@ async function run(name, sc) {
     else check("las pestañas de Flow estuvieron OCULTAS todo el tiempo", /EMPIEZA el lote en u2.*pestaña OCULTA/.test(log) && /EMPIEZA el lote en u3.*pestaña OCULTA/.test(log));
     check("nunca se cambió la vista a Flow", !flowActive);
     const names = [...wantScenes, 3].map((n) => `mundofut_${String(n).padStart(3, "0")}.mp4`);
-    check(`vídeos guardados: ${names.join(", ")}`, names.every((n) => files[n] === 350000) && Object.keys(files).length === names.length, JSON.stringify(files));
+    check(`vídeos guardados: ${names.join(", ")}`, names.every((n) => files[n] === 350000 + parseInt(n.match(/_(\d{3})\./)[1], 10)) && Object.keys(files).length === names.length, JSON.stringify(files));
     if (sc.expectPlanB) check('plan B "Animar" usado al no pintarse la lista', /adjuntada con "Animar"/.test(log));
     if (sc.name === "trusted" || sc.checkDetach) {
       await sleep(1500);
@@ -139,7 +139,7 @@ async function run(name, sc) {
     }
     if (sc.expectEnter) check('encontró el envío con Enter (real o simulado) y lo usó primero después', /aceptó el envío con "Enter(Real)?"/.test(log) && !/Flow no aceptó el envío/.test(log));
     if (sc.expectPlusMenu) check('la lista del "+" se pintó con la pestaña oculta (sin plan B)', (log.match(/adjuntada con el menú "\+"/g) || []).length === 3 && !/plan B/.test(log));
-    if (sc.expectNamed) check("cada vídeo encontrado por el nombre que puso el Agent", (log.match(/y renombrado "mundofut_00\d_\d{4}"/g) || []).length === 3 && !/Aparecieron \d+ vídeos/.test(log), `${(log.match(/y renombrado/g) || []).length} renombrados`);
+    if (sc.expectNamed) check("cada vídeo identificado sin ambigüedad y descargado nada más generarse (sin pasada final)", (log.match(/Vídeo generado en/g) || []).length === 3 && !/Aparecieron \d+ vídeos/.test(log) && !/Fase 2B: descargo/.test(log), `${(log.match(/Vídeo generado en/g) || []).length} generados`);
     if (sc.expectRetries) check("se reintentó suavizando (imagen 3 rondas, vídeo 2 reintentos) hasta conseguirlo", /ronda 3\/5/.test(log) && (log.match(/Reintento \d\/6: pido al Agent el mismo vídeo/g) || []).length >= 2);
     void want;
   } finally {
@@ -155,7 +155,12 @@ async function run(name, sc) {
   const mock = fs.readFileSync(path.join(__dirname, "mock-flow.html"));
   const video = Buffer.alloc(350000, 7);
   const server = https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, (req, res) => {
-    if (req.url.startsWith("/video.mp4")) { res.setHeader("Content-Type", "video/mp4"); return res.end(video); }
+    if (req.url.startsWith("/video.mp4")) {
+      // Cada vídeo pesa 350000 + nº de su escena: así se comprueba que cada archivo es el de SU escena.
+      const sc = (req.url.match(/[?&]scene=(\d{3})/) || [])[1];
+      res.setHeader("Content-Type", "video/mp4");
+      return res.end(sc ? Buffer.alloc(350000 + parseInt(sc, 10), 7) : video);
+    }
     if (req.url.startsWith("/media/")) { res.statusCode = 404; return res.end(); }
     if (req.url.startsWith("/vendor-prosemirror.js")) { res.setHeader("Content-Type", "text/javascript"); return res.end(fs.readFileSync(path.join(__dirname, "vendor-prosemirror.js"))); }
     res.setHeader("Content-Type", "text/html; charset=utf-8");

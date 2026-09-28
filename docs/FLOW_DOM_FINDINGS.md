@@ -99,7 +99,10 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 - **[V]** El aviso de coste y "Aprobar" funcionan: "Flow ha registrado la aprobación" en las 5 escenas; 10 puntos.
 - **[V]** La descarga 1080p pedida por la extensión llegó como `blob:` a los 45 s (11,6 MB); una descarga manual del usuario llegó como `https:`.
 - **[V]** El navegador del usuario no tiene panel lateral para extensiones ("SidePanel API not available").
-- **[SUPUESTO]** Que el Agent renombre los VÍDEOS si se le pide (sí lo hace con las imágenes).
+- **[V por el usuario, prueba v2.6]** El Agent **NO renombra bien los VÍDEOS** aunque se le pida (sí lo hace con las imágenes). Por eso v2.7
+  ya no se lo pide: identifica cada vídeo por diferencia de tiles y lo descarga al momento.
+- **[SUPUESTO, v2.7]** Al adjuntar una imagen, la "caja" del Agent (el antecesor común del editor y del botón generar) cambia
+  (aparece la miniatura). La extensión lo usa para comprobar que la imagen quedó adjunta.
 
 ## Comportamiento de Chrome medido (Chromium 141, no depende de Flow)
 - **[V]** Pestaña oculta: `requestAnimationFrame` no se ejecuta (contador congelado). Al capturarla con `chrome.tabCapture` (o

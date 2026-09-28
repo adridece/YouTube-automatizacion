@@ -28,8 +28,12 @@ para otras cosas). El audio/voz queda fuera del alcance de la extensión (se gen
 2. **Animaciones (Fase 2A)**, **una a una y en orden**: adjuntar al chat de Flow la imagen correspondiente
    (botón "+", elegir la imagen por su nombre, "Añadir a petición" — sin descargarla), escribir el prompt de animación
    de esa escena, generar, esperar a que termine (la IA tarda; a veces hay cola por demanda) y pasar a la siguiente.
-3. **Descarga (Fase 2B)**: cuando han terminado **todas** las animaciones, descargar los vídeos **de uno en uno** (esperando a que
-   cada uno termine), **bien nombrados**, sin diálogos de "guardar como", en la resolución de esa cuenta.
+3. **Descarga**: los vídeos **de uno en uno** (esperando a que cada uno termine), **bien nombrados**, sin diálogos de "guardar
+   como", en la resolución de esa cuenta. **Desde v2.7 (petición del usuario tras la prueba v2.6)**: cada vídeo se descarga
+   **nada más generarse**, con su nombre puesto por la extensión, porque el Agent no renombra bien los vídeos y al final no se
+   sabía cuál era cuál. La "Fase 2B" final solo recoge lo que no se pudo descargar en su momento.
+4. **Autosuficiente (v2.7)**: el usuario no quiere resolver fallos a mano. Todo fallo que no cuesta puntos se reintenta solo
+   (segunda vuelta al final; F5 automático si es técnico); lo único que no se repite solo es un vídeo con el coste ya aprobado.
    - Nombre: le valen `mundofut_001.mp4`, `vid1.mp4` o `001.mp4` (elegible en el panel; por defecto el primero).
    - Todos los vídeos de un lote en una **carpeta NUEVA** `<fecha>_<hora>_<prefijo>/`, la misma para las dos cuentas.
    - Los quiere en el **Escritorio** y quiere **mantener activado** "Preguntar dónde guardar" de Chrome (28 sep 2026). Solución:
