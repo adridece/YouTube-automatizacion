@@ -213,6 +213,24 @@ function setEditableValue(el, text) {
 //    por su propio camino (por si sin foco el texto se ve pero Flow no lo "tiene").
 // Si con un método Flow no acepta el envío, se prueba el otro (sendWithRateLimit).
 let writeMethod = "exec";
+const WRITE_METHODS = ["exec", "paste", "typeReal"];
+// Clic REAL (depurador de Chrome, en coordenadas de la página) sobre el centro de un elemento.
+async function realClick(el) {
+  const target = el.tagName === "BUTTON" ? el : el.querySelector("button") || el;
+  target.scrollIntoView({ block: "nearest" });
+  const r = target.getBoundingClientRect();
+  if (!r.width || !r.height) throw new Error("el elemento no tiene tamaño visible");
+  const res = await send({ type: "DBG_CLICK", x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+  if (!res || !res.ok) throw new Error((res && res.error) || "el depurador no respondió");
+}
+async function typeReal(el, text) {
+  const editable = el.closest('[contenteditable="true"]') || el;
+  editable.focus();
+  document.execCommand("selectAll", false, null);
+  document.execCommand("delete", false, null);
+  const res = await send({ type: "DBG_TYPE", text });
+  if (!res || !res.ok) throw new Error((res && res.error) || "el depurador no respondió");
+}
 function insertViaPaste(el, text) {
   const editable = el.closest('[contenteditable="true"]') || el;
   editable.focus();
@@ -227,10 +245,15 @@ async function writePrompt(text) {
   if (!box) throw new Error('no encuentro la caja de prompt (selector: flow-agent-panel flow-rich-text-editor [contenteditable="true"])');
   const head = text.replace(/\s+/g, " ").slice(0, 25);
   const landed = () => tryWait(() => promptText().replace(/\s+/g, " ").includes(head), 4000, "que el texto aparezca en la caja");
-  const methods = writeMethod === "paste" ? ["paste", "exec"] : ["exec", "paste"];
+  const methods = [writeMethod, ...WRITE_METHODS.filter((m) => m !== writeMethod)];
   for (const m of methods) {
-    if (m === "paste") insertViaPaste(box, text);
-    else setEditableValue(box, text);
+    try {
+      if (m === "paste") insertViaPaste(box, text);
+      else if (m === "typeReal") await typeReal(box, text);
+      else setEditableValue(box, text);
+    } catch (e) {
+      continue;
+    }
     if (await landed()) {
       if (m !== writeMethod) { log("info", `Escribo en la caja con el método "${m}" (el otro no dejó el texto).`); writeMethod = m; }
       return;
@@ -407,10 +430,19 @@ function pressRow(row) {
 //   approvedNoStart  se aprobó el coste pero no apareció nada a tiempo
 //   noStart / error  no se llegó a enviar
 // Formas de enviar el mensaje, en orden. La que funcione pasa a ser la primera.
-let sendOrder = ["clic", "requestSubmit", "Enter"];
-function submitVia(via, genBtn) {
+let sendOrder = ["clic", "clicReal", "EnterReal", "requestSubmit", "Enter"];
+async function submitVia(via, genBtn) {
   const b = genBtn.tagName === "BUTTON" ? genBtn : genBtn.querySelector("button");
   if (via === "clic") return clickDeep(genBtn);
+  if (via === "clicReal") return realClick(genBtn);
+  if (via === "EnterReal") {
+    const box = getPromptBox();
+    if (!box) throw new Error("no hay caja");
+    box.focus();
+    const res = await send({ type: "DBG_ENTER" });
+    if (!res || !res.ok) throw new Error((res && res.error) || "el depurador no respondió");
+    return;
+  }
   if (via === "requestSubmit") {
     const f = b && (b.form || b.closest("form"));
     if (!f || !f.requestSubmit) throw new Error("no hay formulario");
@@ -478,7 +510,8 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun, onlySend }) {
         st.approveClicks++;
         st.approveAt = Date.now();
         log("warn", `El aviso de coste sigue SIN contestar tras pulsar "Aprobar". Lo pulso otra vez de otra forma (intento ${st.approveClicks}/3).`);
-        pressRow(dlg.approveRow);
+        if (st.approveClicks === 2) pressRow(dlg.approveRow);
+        else realClick(dlg.approveRow).catch(() => pressRow(dlg.approveRow));
       }
     } else if (st.approved && !st.answeredLogged) {
       st.answeredLogged = true;
@@ -511,7 +544,7 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun, onlySend }) {
   const order = sendOrder.slice();
   for (let i = 0; i < order.length; i++) {
     const via = order[i];
-    try { submitVia(via, genBtn); } catch (e) { continue; }
+    try { await submitVia(via, genBtn); } catch (e) { log("info", `No pude enviar con "${via}": ${e.message}`); continue; }
     if (i === 0) log("info", via === "clic" ? 'He pulsado "generar".' : `He enviado el mensaje (con "${via}").`);
     else log("info", `El mensaje no salió; pruebo a enviarlo con "${via}".`);
     const r = await tryWait(() => cond() || (wasSent() ? { type: "__sent" } : null), 12000, "que el mensaje salga");
@@ -526,7 +559,7 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun, onlySend }) {
     }
   }
   if (!sentVia && !st.approved) {
-    return { type: "noStart", notSent: true, error: `Flow no aceptó el envío (probé clic, requestSubmit y Enter)${sendDiag(genBtn)}`, approved: false, cost: st.cost, before, textBefore };
+    return { type: "noStart", notSent: true, error: `Flow no aceptó el envío (probé ${order.join(", ")})${sendDiag(genBtn)}`, approved: false, cost: st.cost, before, textBefore };
   }
   if (onlySend) return { type: "sent", via: sentVia, approved: st.approved, cost: st.cost, before, textBefore };
   if (!res) res = await tryWait(cond, CONFIG.startWaitMs, "que Flow empiece a generar");
@@ -541,18 +574,18 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun, onlySend }) {
 // Envía reintentando si Flow dice "Estás preguntando demasiado rápido" (no
 // cuenta como fallo). `prepare` vuelve a dejar la caja lista (texto/imagen).
 async function sendWithRateLimit(prepare, opts) {
-  let switchedWrite = false;
+  let switchedWrite = 0;
   let rewriteOnly = false;
   for (let n = 0; ; n++) {
     throwIfStopped();
     await prepare(n, { rewriteOnly });
     rewriteOnly = false;
     const res = await sendAndConfirm(opts);
-    if (res.type === "noStart" && res.notSent && !switchedWrite) {
+    if (res.type === "noStart" && res.notSent && switchedWrite < WRITE_METHODS.length - 1) {
       // El texto está en la caja pero Flow no lo envía: se reescribe con el
-      // otro método (pegado) y se vuelve a intentar, una vez.
-      switchedWrite = true;
-      writeMethod = writeMethod === "paste" ? "exec" : "paste";
+      // siguiente método de escritura y se vuelve a intentar.
+      switchedWrite++;
+      writeMethod = WRITE_METHODS[(WRITE_METHODS.indexOf(writeMethod) + 1) % WRITE_METHODS.length];
       log("warn", `Flow no aceptó el envío${sendDiag($(CONFIG.generateButtonSelector))}. Reescribo el texto con el método "${writeMethod}" y lo intento otra vez.`);
       n--;
       rewriteOnly = true; // la imagen adjunta sigue en la caja: NO volver a adjuntarla
@@ -1160,6 +1193,10 @@ async function runBatch(cfg, resumeState) {
   if (!cfg.armed && document.visibilityState !== "visible") log("warn", "Esta pestaña está oculta y SIN preparar: Flow puede quedarse parado. Entra en ella y pulsa la cereza una vez (o Alt+Shift+C).");
   let label = "completo";
   setBackgroundMode(true);
+  // Foco simulado (depurador): Flow solo acepta envíos si cree tener el foco.
+  const dbg = await send({ type: "DBG_ON" });
+  if (dbg && dbg.ok) log("info", 'Foco activado para trabajar sin mirar Flow (Chrome muestra la barra "Cerezium ha empezado a depurar este navegador"; no la cierres, se quita sola al terminar).');
+  else log("warn", `No pude activar el foco simulado (${(dbg && dbg.error) || "sin respuesta"}). Si no miras esta pestaña, Flow puede no aceptar los envíos.`);
   try {
     const box = await tryWait(() => getPromptBox(), 90000, "la caja de prompt de Flow");
     if (!box) {

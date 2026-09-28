@@ -253,7 +253,7 @@ function checklistItems() {
     { id: "confirm", t: "Flow: «Confirmar antes de generar» = Siempre", d: "Ajustes ⚙ → Configuración del agente. Así la extensión lee el coste y solo aprueba si es ≤ 10 puntos." },
     { id: "model", t: "Flow: vídeo con «Omni 1.1 Flash», 9:16 y x1", d: "Imagen y vídeo en 9:16 y cantidad x1. La extensión nunca toca el modelo." },
     { id: "project", t: "Un proyecto NUEVO y vacío en cada cuenta", d: "Si ya hay imágenes «001», «002»… se puede confundir de imagen." },
-    { id: "armed", t: "Pestañas de Flow preparadas para segundo plano", d: "Entra en cada pestaña de Flow y pulsa la cereza (o Alt+Shift+C) una vez. Verás el icono de «compartiendo» en ella: es la extensión manteniéndola activa, no se graba nada. Luego puedes usar otras pestañas.", auto: allArmed() },
+    { id: "armed", t: "Pestañas de Flow preparadas para segundo plano", d: "Entra en cada pestaña de Flow y pulsa la cereza (o Alt+Shift+C) una vez. Verás el icono de «compartiendo» en ella: es la extensión manteniéndola activa, no se graba nada. Durante el lote, Chrome muestra además la barra «Cerezium ha empezado a depurar este navegador»: no la cierres (se quita sola al terminar). Luego puedes usar otras pestañas.", auto: allArmed() },
   ];
   if (dest === "downloads") items.push({ id: "askoff", t: "«Preguntar dónde guardar cada archivo» desactivado", d: 'Solo hace falta con este destino. <a href="#" data-open="chrome://settings/downloads">Abrir ajuste</a>' });
   else items.push({ id: "folderok", t: "Carpeta de destino elegida y con permiso", d: "Se comprueba sola al pulsar «Iniciar lote».", auto: folderState.has && folderState.perm === "granted" });
