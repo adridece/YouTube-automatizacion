@@ -252,7 +252,7 @@ function findAssetMatches(texts, label) {
   const out = [];
   texts.forEach((txt, i) => {
     const p = parseAssetItemText(txt);
-    if (p.name === label && p.kind !== "video") out.push(i);
+    if (imageTitleMatches(p.name, label) && p.kind !== "video") out.push(i);
   });
   return out;
 }
@@ -467,4 +467,26 @@ function buildSoftenNote(kind, attempt) {
     return `(El intento anterior falló o fue bloqueado por las políticas de contenido. Reformula ${what} de forma un poco más suave y segura, sin cambiar la idea. ${keep})`;
   }
   return `(Intento ${attempt}: ha vuelto a bloquearse. Suaviza más ${what}: sustituye cualquier elemento que pueda considerarse violento, sexual, peligroso, de marca/logotipo o de una persona real identificable por equivalentes neutros o genéricos. ${keep})`;
+}
+
+// ¿El nombre de un tile de imagen corresponde a la escena `label` ("006")?
+// El Agent a veces no pone "006" exacto: "[006]", "006.png", "Imagen 006",
+// "img_006" o "6". (v2.6: la cuenta 2 dio imágenes por perdidas que existían.)
+function imageTitleMatches(title, label) {
+  const t = String(title || "").trim().toLowerCase()
+    .replace(/\.(png|jpe?g|webp)$/, "")
+    .replace(/[\[\]()]/g, "")
+    .replace(/^(imagen|image|img|escena|scene)[\s_-]*/, "")
+    .trim();
+  if (t === label) return true;
+  if (/^\d{1,3}$/.test(t)) return parseInt(t, 10) === parseInt(label, 10);
+  return false;
+}
+
+// Texto que se añade al prompt de vídeo para que el Agent respete los 6 s
+// (de la duración depende el coste: 6 s = 10 puntos). `strong` en los reenvíos
+// tras un aviso de coste > 10.
+function buildDurationNote(seconds, strong) {
+  const base = `IMPORTANTE: genera UN solo vídeo de EXACTAMENTE ${seconds} segundos (Duration: ${seconds} seconds). No uses otra duración.`;
+  return strong ? `${base} El intento anterior salió con una duración mayor y costaba más de 10 puntos: debe durar ${seconds} segundos, ni uno más.` : base;
 }

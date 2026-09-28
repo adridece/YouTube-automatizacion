@@ -60,7 +60,7 @@ const CONFIG = {
   // Esperas (ms)
   startWaitMs: 25000, // a que aparezca el aviso de coste o un tile pendiente
   sentWaitMs: 8 * 60000, // si el mensaje ya se envió/aprobó: la IA piensa o hay cola
-  imagesSettleMs: 15000, // el Agent renombra DESPUÉS de terminar
+  imagesSettleMs: 40000, // el Agent renombra DESPUÉS de terminar (a veces tarda)
   assetListWaitMs: 10000,
   rateLimitMaxRetries: 4,
   download: { createdTimeoutMs: 180000, completeTimeoutMs: 300000, attempts: 3 },
@@ -347,7 +347,7 @@ function tileReady(t) { return !tileLooksInProgress(t.textContent); }
 function videoTilesByTitle(name) { return $$(CONFIG.videoTileTag).filter((t) => tileTitle(t) === name); }
 
 function imageTilesByLabel(label) {
-  return $$(CONFIG.imageTileTag).filter((t) => tileTitle(t) === label);
+  return $$(CONFIG.imageTileTag).filter((t) => imageTitleMatches(tileTitle(t), label));
 }
 function findImageTileByLabel(label) { return imageTilesByLabel(label)[0] || null; }
 
@@ -521,7 +521,10 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun, onlySend }) {
     if (sig.genError) return { type: "genError" };
     if (sig.cancelled && !st.approved) return { type: "cancelled" };
     const now = snapshotTiles();
-    if (now.pending > before.pending || newVideoTiles(before).length || now.imageCount > before.imageCount) return { type: "started" };
+    // Sin aprobación, un vídeo nuevo TERMINADO no cuenta como "empezó": puede
+    // ser uno de una escena anterior que acaba tarde (se exige un tile nuevo
+    // "generándose"). Así no se confunde con «Confirmar antes de generar = Nunca».
+    if (now.pending > before.pending || (st.approved && newVideoTiles(before).length) || now.imageCount > before.imageCount) return { type: "started" };
     return null;
   };
 
@@ -665,8 +668,15 @@ async function phaseImages(cfg, isResume) {
   const present = (n) => imageTilesByLabel(pad3(n)).length > countBefore.get(n);
   log("info", "Compruebo que el Agent las haya renombrado (lo hace unos segundos después)…");
   await tryWait(() => todo.every(present), CONFIG.imagesSettleMs, "el renombrado de las imágenes");
+  // Antes de dar una imagen por perdida, se busca también desplazando la cuadrícula
+  // (puede no estar pintada si hay muchas).
+  for (const n of todo.filter((n) => !present(n))) await findWithScroll(() => (present(n) ? true : null), CONFIG.imageTileTag);
   let missing = todo.filter((n) => !present(n));
   for (const n of todo.filter(present)) await setStep(n, "image", "done");
+  if (missing.length) {
+    const seen = $$(CONFIG.imageTileTag).map(tileTitle).filter(Boolean).slice(0, 20).join(", ");
+    log("info", `Nombres de imagen que veo en el proyecto: ${seen || "ninguno"}.`);
+  }
 
   const maxRounds = Math.max(1, (cfg.maxRetries || 6) - 1);
   for (let round = 1; round <= maxRounds && missing.length; round++) {
@@ -840,16 +850,25 @@ async function phaseVideos(cfg) {
     const tileName = buildVideoTileName(cfg.prefix, n, cfg.batchFolder);
     // Se pide al Agent que renombre el vídeo (como ya hace con las imágenes) para
     // encontrarlo después por su nombre. No cambia la duración (ni el coste).
-    const prompt = ensureVideoDuration(raw, CONFIG.videoSeconds) + `\n\n(Cuando termine de generarse, cambia el nombre de este vídeo exactamente a: ${tileName})`;
+    // Lo más importante del coste: la DURACIÓN (6 s = 10 puntos). Se remarca al
+    // principio y al final; además del "6 seconds" dentro del propio prompt.
+    const buildPrompt = (strong) =>
+      `${buildDurationNote(CONFIG.videoSeconds, strong)}\n\n${ensureVideoDuration(raw, CONFIG.videoSeconds)}\n\n` +
+      `(Duración: ${CONFIG.videoSeconds} segundos exactos. Cuando termine de generarse, cambia el nombre de este vídeo exactamente a: ${tileName})`;
+    const prompt = buildPrompt(false);
     if (ensureVideoDuration(raw, CONFIG.videoSeconds) !== raw) log("info", `Ajusto la duración del prompt a ${CONFIG.videoSeconds} s (de ella depende el coste: 6 s = 10 puntos).`);
 
     let lastError = null;
     let outcome = null;
+    let costRetries = 0;
+    let strongDuration = false;
+    let haltAfterScene = null;
     const maxAttempts = Math.max(1, cfg.maxRetries || CONFIG.maxAttemptsPerScene);
-    for (let attempt = 1; attempt <= maxAttempts && !outcome; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts && !outcome && !haltAfterScene; attempt++) {
       ui.setStatus(`Escena ${pad3(n)}: vídeo (intento ${attempt}/${maxAttempts})`, "info");
       await setStep(n, "video", "running", { videoApproved: false, error: null });
-      const text = attempt === 1 ? prompt : `${prompt}\n\n${buildSoftenNote("video", attempt)}`;
+      const base = strongDuration ? buildPrompt(true) : prompt;
+      const text = attempt === 1 ? base : `${base}\n\n${buildSoftenNote("video", attempt)}`;
       if (attempt > 1) log("info", `Reintento ${attempt}/${maxAttempts}: pido al Agent el mismo vídeo con el prompt suavizado.`);
       let res;
       try {
@@ -872,9 +891,27 @@ async function phaseVideos(cfg) {
           break;
         }
         if (res.type === "cost") {
-          throw new CostError(res.cost === null
-            ? "no pude leer cuántos puntos pide el vídeo; lo rechacé por seguridad"
-            : `el vídeo pedía ${res.cost} puntos (máximo ${CONFIG.maxAllowedPointsPerVideo}); lo rechacé. Comprueba que el modelo de vídeo sigue en "Omni 1.1 Flash"`);
+          // Pedía más de 10 (p. ej. 12: la IA entendió otra duración). Se ha
+          // pulsado "Rechazar" (gratis) y se vuelve a pedir remarcando los 6 s.
+          const why = res.cost === null ? "no pude leer el coste" : `pedía ${res.cost} puntos (máximo ${CONFIG.maxAllowedPointsPerVideo})`;
+          costRetries++;
+          if (costRetries <= 3) {
+            log("warn", `El vídeo ${why}: lo he RECHAZADO (no cuesta nada) y lo vuelvo a pedir remarcando que dure ${CONFIG.videoSeconds} segundos (reenvío ${costRetries}/3).`);
+            strongDuration = true;
+            attempt--; // no cuenta como intento de "bloqueo por contenido"
+            await sleep(3000);
+            continue;
+          }
+          lastError = `${why} también tras 3 reenvíos remarcando la duración; no lo apruebo. Comprueba que el modelo de vídeo sigue en "Omni 1.1 Flash"`;
+          log("error", `El vídeo ${lastError}.`);
+          break;
+        }
+        if (res.type === "started" && !res.approved && !cfg.dryRun) {
+          // Empezó a generar SIN aviso de coste: "Confirmar antes de generar"
+          // está en "Nunca" y no se puede comprobar que cueste 10. Se deja
+          // terminar ESTE vídeo y se para de generar en la cuenta.
+          haltAfterScene = 'Flow empezó a generar el vídeo SIN pedir confirmación de coste: el ajuste «Confirmar antes de generar» parece estar en «Nunca». Ponlo en «Siempre» (Ajustes ⚙ → Configuración del agente): así la extensión aprueba solo si cuesta 10 puntos';
+          log("error", haltAfterScene + ".");
         }
         if (res.type === "started") {
           log("info", `Generando el vídeo… (espero hasta ${Math.round(maxWaitMs / 60000)} min; con cola puede tardar)`);
@@ -891,6 +928,8 @@ async function phaseVideos(cfg) {
             outcome = "review";
           } else {
             lastError = v.error === "policy" ? "Flow lo bloqueó por su política de contenido" : "Flow dice que no se ha podido generar (no se cobra)";
+            // Sin confirmación de coste no se reintenta: se generaría sin poder comprobar los puntos.
+            if (haltAfterScene) break;
             log("warn", `${lastError}.${attempt < maxAttempts ? " Reintento suavizando el prompt." : ""}`);
           }
         } else if (res.type === "approvedNoStart") {
@@ -915,8 +954,9 @@ async function phaseVideos(cfg) {
     } else if (outcome !== "done") {
       await setStep(n, "video", "failed", { error: lastError || "no se pudo generar" });
       await setStep(n, "download", "skipped");
-      log("error", `No se pudo generar el vídeo tras ${maxAttempts} intentos: ${lastError}. Sigo con la siguiente escena.`);
+      log("error", `No se pudo generar el vídeo: ${lastError}. Sigo con la siguiente escena.`);
     }
+    if (haltAfterScene) throw new CostError(haltAfterScene);
     await sleep(1500);
   }
   ctxScene = null;

@@ -236,3 +236,14 @@ test("buildSoftenNote: cada intento suaviza más sin cambiar la escena", () => {
   assert.ok(n4.startsWith("(Intento 4"));
   assert.ok(n4.includes("misma escena"));
 });
+
+test("imageTitleMatches: variantes del nombre que pone el Agent", () => {
+  for (const t of ["006", "[006]", "006.png", "Imagen 006", "img_006", "6", " 006 "]) assert.ok(S.imageTitleMatches(t, "006"), t);
+  for (const t of ["0060", "016", "007", "caricature footballer", "", "Imagen 007"]) assert.ok(!S.imageTitleMatches(t, "006"), t);
+});
+
+test("buildDurationNote: remarca los 6 segundos", () => {
+  assert.ok(S.buildDurationNote(6).includes("EXACTAMENTE 6 segundos"));
+  assert.ok(S.buildDurationNote(6).includes("Duration: 6 seconds"));
+  assert.ok(S.buildDurationNote(6, true).includes("ni uno más"));
+});
