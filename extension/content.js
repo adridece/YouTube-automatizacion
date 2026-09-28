@@ -207,13 +207,36 @@ function setEditableValue(el, text) {
   else document.execCommand("delete", false, null);
   editable.dispatchEvent(new Event("input", { bubbles: true }));
 }
+// Dos formas de escribir en el editor (ProseMirror) de Flow:
+//  - "exec": execCommand insertText ([V] funciona con la pestaña a la vista);
+//  - "paste": un evento "pegar" con el texto, que ProseMirror mete en SU modelo
+//    por su propio camino (por si sin foco el texto se ve pero Flow no lo "tiene").
+// Si con un método Flow no acepta el envío, se prueba el otro (sendWithRateLimit).
+let writeMethod = "exec";
+function insertViaPaste(el, text) {
+  const editable = el.closest('[contenteditable="true"]') || el;
+  editable.focus();
+  document.execCommand("selectAll", false, null);
+  document.execCommand("delete", false, null);
+  const dt = new DataTransfer();
+  dt.setData("text/plain", text);
+  editable.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+}
 async function writePrompt(text) {
   const box = getPromptBox();
   if (!box) throw new Error('no encuentro la caja de prompt (selector: flow-agent-panel flow-rich-text-editor [contenteditable="true"])');
-  setEditableValue(box, text);
   const head = text.replace(/\s+/g, " ").slice(0, 25);
-  const ok = await tryWait(() => promptText().replace(/\s+/g, " ").includes(head), 4000, "que el texto aparezca en la caja");
-  if (!ok) throw new Error("escribí el prompt pero no aparece en la caja de Flow");
+  const landed = () => tryWait(() => promptText().replace(/\s+/g, " ").includes(head), 4000, "que el texto aparezca en la caja");
+  const methods = writeMethod === "paste" ? ["paste", "exec"] : ["exec", "paste"];
+  for (const m of methods) {
+    if (m === "paste") insertViaPaste(box, text);
+    else setEditableValue(box, text);
+    if (await landed()) {
+      if (m !== writeMethod) { log("info", `Escribo en la caja con el método "${m}" (el otro no dejó el texto).`); writeMethod = m; }
+      return;
+    }
+  }
+  throw new Error("escribí el prompt pero no aparece en la caja de Flow");
 }
 
 // Busca en el menú flotante MÁS RECIENTE primero: con la pestaña en segundo
@@ -348,6 +371,18 @@ function findPendingCostDialog() {
   }
   return null;
 }
+// Rechaza avisos de coste que no corresponden a la petición en curso (p. ej.
+// una petición duplicada que Flow muestra tarde). Nunca se aprueban.
+const handledStray = new WeakSet();
+function rejectStrayCostDialogs(when) {
+  let dlg;
+  while ((dlg = findPendingCostDialog()) && !handledStray.has(dlg.message)) {
+    handledStray.add(dlg.message);
+    if (dlg.rejectRow) dlg.rejectRow.click();
+    log("warn", `Había un aviso de coste que no es de esta petición (${dlg.cost} puntos, ${when}): lo he RECHAZADO para no pagar de más.`);
+  }
+}
+
 // Segundo intento si el clic no hizo efecto: teclado sobre el radio y clic
 // en su primer hijo. [SUPUESTO] que haga falta; se registra en el log.
 function pressRow(row) {
@@ -371,17 +406,44 @@ function pressRow(row) {
 //   cancelled        el Agent canceló
 //   approvedNoStart  se aprobó el coste pero no apareció nada a tiempo
 //   noStart / error  no se llegó a enviar
-async function sendAndConfirm({ maxPoints, onApproved, dryRun }) {
+// Formas de enviar el mensaje, en orden. La que funcione pasa a ser la primera.
+let sendOrder = ["clic", "requestSubmit", "Enter"];
+function submitVia(via, genBtn) {
+  const b = genBtn.tagName === "BUTTON" ? genBtn : genBtn.querySelector("button");
+  if (via === "clic") return clickDeep(genBtn);
+  if (via === "requestSubmit") {
+    const f = b && (b.form || b.closest("form"));
+    if (!f || !f.requestSubmit) throw new Error("no hay formulario");
+    return f.requestSubmit(b && b.type === "submit" ? b : undefined);
+  }
+  const box = getPromptBox();
+  if (!box) throw new Error("no hay caja");
+  box.focus();
+  for (const t of ["keydown", "keypress", "keyup"]) box.dispatchEvent(new KeyboardEvent(t, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+}
+function countIn(hay, needle) {
+  if (!needle) return 0;
+  let n = 0, i = 0;
+  while ((i = hay.indexOf(needle, i)) !== -1) { n++; i += needle.length; }
+  return n;
+}
+function sendDiag(genBtn) {
+  return ` [foco: ${document.hasFocus() ? "sí" : "no"} · pestaña: ${document.visibilityState} · botón: ${genBtn && isDisabledBtn(genBtn) ? "deshabilitado" : "habilitado"} · escritura: ${writeMethod}]`;
+}
+
+async function sendAndConfirm({ maxPoints, onApproved, dryRun, onlySend }) {
   const genBtn = $(CONFIG.generateButtonSelector);
   if (!genBtn) return { type: "error", error: "no encuentro el botón de generar (flow-agent-panel flow-generate-icon-button)" };
   if (isDisabledBtn(genBtn)) {
     const ok = await tryWait(() => !isDisabledBtn(genBtn), 15000, "a que se habilite el botón de generar");
     if (!ok) return { type: "error", error: "el botón de generar sigue deshabilitado tras 15 s (¿Flow sigue ocupado?)" };
   }
+  // Un aviso de coste que YA estaba pendiente antes de enviar no es de esta
+  // petición (duplicado o viejo): se rechaza para no aprobarlo por error.
+  rejectStrayCostDialogs("antes de enviar");
   const textBefore = agentPanelText();
   const before = snapshotTiles();
-  const hadText = promptText().length > 0;
-  const st = { approved: false, approveAt: 0, approveClicks: 0, answeredLogged: false, cost: null };
+  const st = { approved: false, approvedMsg: null, approveAt: 0, approveClicks: 0, answeredLogged: false, cost: null, dupRejected: 0 };
 
   const cond = () => {
     const sig = detectNewSignals(textBefore, agentPanelText());
@@ -401,10 +463,17 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun }) {
         }
         dlg.approveRow.click();
         st.approved = true;
+        st.approvedMsg = dlg.message;
         st.approveAt = Date.now();
         st.approveClicks = 1;
         log("info", `Aviso de coste: ${dlg.cost} puntos (límite ${maxPoints}). He pulsado "Aprobar" (solo esta vez).`);
         if (onApproved) onApproved(dlg.cost);
+      } else if (dlg.message !== st.approvedMsg) {
+        // Un SEGUNDO aviso de coste después de aprobar el primero = petición
+        // duplicada: se rechaza para no pagar dos veces.
+        if (dlg.rejectRow) dlg.rejectRow.click();
+        st.dupRejected++;
+        log("warn", `Apareció un segundo aviso de coste (${dlg.cost} puntos) después de aprobar el primero: lo he RECHAZADO para no pagar dos veces.`);
       } else if (Date.now() - st.approveAt > 6000 && st.approveClicks < 3) {
         st.approveClicks++;
         st.approveAt = Date.now();
@@ -423,23 +492,48 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun }) {
     return null;
   };
 
-  clickDeep(genBtn);
-  log("info", 'He pulsado "generar".');
-  let res = await tryWait(cond, CONFIG.startWaitMs, "que Flow empiece a generar");
+  // ¿Se envió? La caja se vacía, o el texto aparece como mensaje en el chat,
+  // o ya hay aviso de coste / algo generándose. Así nunca se reenvía un
+  // mensaje que sí salió (duplicaría la generación y los puntos).
+  const norm = (x) => x.replace(/\s+/g, " ");
+  const boxText = norm(promptText());
+  const head = boxText.slice(0, 30);
+  const tail = boxText.length > 60 ? boxText.slice(-30) : "";
+  const headCount0 = countIn(norm(agentPanelText()), head);
+  const tailCount0 = countIn(norm(agentPanelText()), tail);
+  const wasSent = () => {
+    if (promptText().length === 0) return true;
+    const all = norm(agentPanelText());
+    return countIn(all, head) > headCount0 || (tail && countIn(all, tail) > tailCount0);
+  };
+  let res = null;
+  let sentVia = null;
+  const order = sendOrder.slice();
+  for (let i = 0; i < order.length; i++) {
+    const via = order[i];
+    try { submitVia(via, genBtn); } catch (e) { continue; }
+    if (i === 0) log("info", via === "clic" ? 'He pulsado "generar".' : `He enviado el mensaje (con "${via}").`);
+    else log("info", `El mensaje no salió; pruebo a enviarlo con "${via}".`);
+    const r = await tryWait(() => cond() || (wasSent() ? { type: "__sent" } : null), 12000, "que el mensaje salga");
+    if (r) {
+      sentVia = via;
+      if (r.type !== "__sent") res = r;
+      if (via !== sendOrder[0]) {
+        log("ok", `Flow aceptó el envío con "${via}": lo usaré primero a partir de ahora.`);
+        sendOrder = [via, ...sendOrder.filter((x) => x !== via)];
+      }
+      break;
+    }
+  }
+  if (!sentVia && !st.approved) {
+    return { type: "noStart", notSent: true, error: `Flow no aceptó el envío (probé clic, requestSubmit y Enter)${sendDiag(genBtn)}`, approved: false, cost: st.cost, before, textBefore };
+  }
+  if (onlySend) return { type: "sent", via: sentVia, approved: st.approved, cost: st.cost, before, textBefore };
+  if (!res) res = await tryWait(cond, CONFIG.startWaitMs, "que Flow empiece a generar");
   if (!res) {
-    let sent = hadText && promptText().length === 0;
-    if (!sent && !st.approved) {
-      log("warn", `El clic en "generar" no parece haber enviado nada (el texto sigue en la caja)${visibilityNote()}. Lo pulso otra vez (solo una).`);
-      clickDeep(genBtn);
-      res = await tryWait(cond, CONFIG.startWaitMs, "que Flow empiece a generar (2º clic)");
-      sent = promptText().length === 0;
-    }
-    if (!res && (sent || st.approved)) {
-      log("info", `${st.approved ? "Coste aprobado" : "Mensaje enviado"}; la IA está pensando o hay cola. Espero hasta ${Math.round(CONFIG.sentWaitMs / 60000)} min SIN volver a pulsar "generar".`);
-      res = await tryWait(cond, CONFIG.sentWaitMs, "que Flow empiece a generar (mensaje ya enviado)");
-      if (!res) res = { type: st.approved ? "approvedNoStart" : "noStart", error: "Flow no empezó a generar nada a tiempo" };
-    }
-    if (!res) res = { type: "noStart", error: `el botón de generar no envió el mensaje ni al segundo clic${visibilityNote()}` };
+    log("info", `${st.approved ? "Coste aprobado" : "Mensaje enviado"}; la IA está pensando o hay cola. Espero hasta ${Math.round(CONFIG.sentWaitMs / 60000)} min SIN volver a enviarlo.`);
+    res = await tryWait(cond, CONFIG.sentWaitMs, "que Flow empiece a generar (mensaje ya enviado)");
+    if (!res) res = { type: st.approved ? "approvedNoStart" : "noStart", error: "Flow no empezó a generar nada a tiempo" };
   }
   return { ...res, approved: st.approved, cost: st.cost, before, textBefore };
 }
@@ -447,10 +541,23 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun }) {
 // Envía reintentando si Flow dice "Estás preguntando demasiado rápido" (no
 // cuenta como fallo). `prepare` vuelve a dejar la caja lista (texto/imagen).
 async function sendWithRateLimit(prepare, opts) {
+  let switchedWrite = false;
+  let rewriteOnly = false;
   for (let n = 0; ; n++) {
     throwIfStopped();
-    await prepare(n);
+    await prepare(n, { rewriteOnly });
+    rewriteOnly = false;
     const res = await sendAndConfirm(opts);
+    if (res.type === "noStart" && res.notSent && !switchedWrite) {
+      // El texto está en la caja pero Flow no lo envía: se reescribe con el
+      // otro método (pegado) y se vuelve a intentar, una vez.
+      switchedWrite = true;
+      writeMethod = writeMethod === "paste" ? "exec" : "paste";
+      log("warn", `Flow no aceptó el envío${sendDiag($(CONFIG.generateButtonSelector))}. Reescribo el texto con el método "${writeMethod}" y lo intento otra vez.`);
+      n--;
+      rewriteOnly = true; // la imagen adjunta sigue en la caja: NO volver a adjuntarla
+      continue;
+    }
     if (res.type === "noPoints") throw new NoPointsError("Flow indica que no quedan puntos/créditos en esta cuenta");
     if (res.type !== "rateLimit") return res;
     if (res.approved) return { ...res, type: "approvedNoStart", error: 'Flow dijo "demasiado rápido" después de aprobar el coste' };
@@ -493,7 +600,15 @@ async function phaseImages(cfg, isResume) {
   for (const n of todo) await setStep(n, "image", "running");
   log("info", `Fase 1: pido al Agent ${todo.length} imagen(es): ${todo.map(pad3).join(", ")}.`);
   const instruction = buildAgentInstruction(imagesMap, todo);
-  const res = await sendWithRateLimit(() => writePrompt(instruction), { maxPoints: CONFIG.maxAllowedPointsImages });
+  let res = null;
+  for (let launch = 1; launch <= 3; launch++) {
+    res = await sendWithRateLimit(() => writePrompt(instruction), { maxPoints: CONFIG.maxAllowedPointsImages });
+    // Solo se reintenta si es SEGURO que el mensaje no salió (no duplicar imágenes).
+    if (!(res.notSent || res.type === "error") || launch === 3) break;
+    log("warn", `No se pudo lanzar la generación de imágenes (${res.error || res.type}). Reintento en 20 s (${launch + 1}/3).`);
+    await sleep(20000);
+    throwIfStopped();
+  }
   if (res.type === "cost") throw new CostError(`las imágenes pedían ${res.cost} puntos (límite de seguridad ${CONFIG.maxAllowedPointsImages}); lo rechacé`);
   if (res.type !== "started") {
     const why = res.error || `Flow respondió "${res.type}"`;
@@ -640,6 +755,7 @@ async function waitForSceneVideo(sendRes, maxWaitMs, wantedName) {
   let freshReadySince = 0;
   let lastInProgressNote = 0;
   const r = await tryWait(() => {
+    rejectStrayCostDialogs("mientras se generaba el vídeo");
     const sig = detectNewSignals(sendRes.textBefore, agentPanelText());
     if (sig.policy) return { error: "policy" };
     if (wantedName) {
@@ -705,10 +821,12 @@ async function phaseVideos(cfg) {
       let res;
       try {
         const t0 = Date.now();
-        res = await sendWithRateLimit(async () => {
-          const box = getPromptBox();
-          if (box && promptText()) setEditableValue(box, "");
-          await attachReferenceImage(n);
+        res = await sendWithRateLimit(async (_n, o) => {
+          if (!(o && o.rewriteOnly)) {
+            const box = getPromptBox();
+            if (box && promptText()) setEditableValue(box, "");
+            await attachReferenceImage(n);
+          }
           await writePrompt(text);
         }, { maxPoints: CONFIG.maxAllowedPointsPerVideo, dryRun: !!cfg.dryRun, onApproved: () => { s.videoApproved = true; saveBatch(); } });
 
@@ -950,6 +1068,13 @@ async function finishRun(label) {
   const where = batch.config.destMode === "folder" ? `carpeta elegida/${batch.config.batchFolder}` : `Descargas/MundoFutFlow/${batch.config.batchFolder}`;
   ctxScene = null;
   ctxPhase = "run";
+  if (batch.config.genMode === "sendTest") {
+    for (const n of batch.order) for (const k of ["image", "video", "download"]) batch.scenes[n][k] = "skipped";
+    saveBatch();
+    send({ type: "RUN_COMPLETE", acc: ACC, summary: { doneCount: 0, total: 0, problemScenes: [] } });
+    ui.setStatus("Prueba de envío terminada: mira el log", "ok");
+    return;
+  }
   if (batch.config.genMode === "dryRun" && label === "completo") {
     const reached = batch.order.filter((n) => /ensayo/.test(batch.scenes[n].error || ""));
     const msg = `ENSAYO terminado en ${ACC}: ${reached.length}/${total} escenas llegaron hasta el aviso de coste y se rechazaron. 0 puntos gastados.${problems.length ? ` Fallaron antes: ${problems.map(pad3).join(", ")}.` : ""}`;
@@ -973,6 +1098,16 @@ async function finishRun(label) {
   });
   send({ type: "RUN_COMPLETE", acc: ACC, summary: { doneCount: sum.done.length, total, problemScenes: problems } });
   ui.setStatus(problems.length ? `Terminado con avisos (${problems.map(pad3).join(", ")})` : "Terminado ✅", problems.length ? "warn" : "ok");
+}
+
+// PRUEBA DE ENVÍO (0 puntos): manda al Agent un mensaje que no genera nada y
+// apunta qué forma de escribir/enviar acepta Flow en esta pestaña.
+async function runSendTest() {
+  ctxPhase = "setup";
+  log("info", `PRUEBA DE ENVÍO: escribo un mensaje de prueba (no genera nada, 0 puntos)${sendDiag($(CONFIG.generateButtonSelector))}.`);
+  const res = await sendWithRateLimit(() => writePrompt("Responde únicamente con la palabra OK. No generes ninguna imagen ni vídeo."), { maxPoints: 0, dryRun: true, onlySend: true });
+  if (res.type === "sent") log("ok", `PRUEBA DE ENVÍO correcta: Flow aceptó el mensaje (escritura "${writeMethod}", envío "${res.via}")${sendDiag($(CONFIG.generateButtonSelector))}.`);
+  else log("error", `PRUEBA DE ENVÍO fallida: ${res.error || res.type}. Pásale este log a Claude.`);
 }
 
 // PRUEBA DE DESCARGA (0 puntos): asigna a las escenas del rango vídeos que
@@ -1016,7 +1151,7 @@ async function runBatch(cfg, resumeState) {
   const isResume = !!resumeState;
   batch = resumeState ? prepareResume(resumeState) : createBatchState({ batchId: cfg.batchId || String(Date.now()), accountKey: ACC, sceneNumbers: cfg.sceneNumbers, config: cfg });
   if (cfg.genMode === "dryRun") cfg.dryRun = true;
-  if (["animationsOnly", "dryRun", "downloadTest"].includes(cfg.genMode) && !isResume) for (const n of batch.order) batch.scenes[n].image = "done";
+  if (["animationsOnly", "dryRun", "downloadTest", "sendTest"].includes(cfg.genMode) && !isResume) for (const n of batch.order) batch.scenes[n].image = "done";
   if (cfg.genMode === "imagesOnly" && !isResume) for (const n of batch.order) batch.scenes[n].video = "skipped";
   await saveBatch();
   send({ type: "HEARTBEAT", acc: ACC, on: true });
@@ -1030,6 +1165,11 @@ async function runBatch(cfg, resumeState) {
     if (!box) {
       const shown = (document.body ? document.body.innerText : "").replace(/\s+/g, " ").trim().slice(0, 140);
       throw new Error(`no encuentro la caja de prompt de Flow tras 90 s (pestaña ${document.visibilityState}; URL ${location.pathname}; la página muestra: "${shown || "nada"}")`);
+    }
+    if (cfg.genMode === "sendTest") {
+      await runSendTest();
+      batch.status = "done";
+      return { ok: true };
     }
     if (["paired", "imagesOnly"].includes(cfg.genMode)) await phaseImages(cfg, isResume);
     if (cfg.genMode === "downloadTest") await pickExistingVideos();
