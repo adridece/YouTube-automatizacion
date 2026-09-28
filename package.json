@@ -1,6 +1,6 @@
 {
   "name": "flow-batch-runner",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "Extensión de Chrome que automatiza Google Flow para producir Shorts en lote (MUNDO FUT / The Odd Ledger).",
   "engines": {

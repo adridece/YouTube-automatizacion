@@ -75,6 +75,27 @@ function setupSidePanel() {
   }
 }
 setupSidePanel();
+chrome.runtime.onStartup.addListener(setupSidePanel);
+
+// Plan B: si Chrome no aplicó "abrir el panel al pulsar el icono" (visto en el
+// Chrome del usuario: el clic no hacía nada), se abre a mano.
+chrome.action.onClicked.addListener((tab) => {
+  openControlPanel(tab).catch(() => {});
+});
+
+// Abre el panel lateral; si Chrome no lo permite, lo abre como pestaña normal.
+async function openControlPanel(tab) {
+  try {
+    if (!chrome.sidePanel || !chrome.sidePanel.open) throw new Error("este Chrome no tiene chrome.sidePanel.open");
+    await chrome.sidePanel.open(tab && tab.windowId != null ? { windowId: tab.windowId } : { tabId: tab.id });
+    return "panel";
+  } catch (e) {
+    blog("warn", `No pude abrir el panel lateral (${e.message}); lo abro como pestaña.`);
+    await chrome.tabs.create({ url: chrome.runtime.getURL("sidepanel.html") });
+    return "tab";
+  }
+}
+
 chrome.runtime.onInstalled.addListener((d) => {
   setupSidePanel();
   blog("info", `Extensión ${d.reason === "install" ? "instalada" : "actualizada/recargada"} (v${VERSION}). Si tenías pestañas de Flow abiertas, pulsa F5 en ellas.`);
@@ -499,6 +520,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await saveJob();
         }
         return { ok: true };
+      case "OPEN_PANEL":
+        return { ok: true, how: await openControlPanel(sender.tab) };
       case "FS_STATUS":
         return await offscreenCall({ type: "FS_STATUS" });
       default:

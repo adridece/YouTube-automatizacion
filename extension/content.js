@@ -1201,7 +1201,7 @@ const ui = (() => {
         <div class="log" id="log" aria-live="polite">${lines || '<div style="color:#6f7480">El log aparecerá aquí.</div>'}</div>
         <div class="btns">
           ${runningNow ? '<button class="danger" id="stop">Detener</button>' : ""}
-          <button id="copy">Copiar log</button><button id="move" title="Mover a otra esquina">Mover</button><button id="min">Plegar</button>
+          <button id="panel">Panel de control</button><button id="copy">Copiar log</button><button id="move" title="Mover a otra esquina">Mover</button><button id="min">Plegar</button>
         </div></div>`;
     }
     const cd = st.countdown ? `<div class="cd" role="alert"><span>${esc(st.countdown.text.replace("{s}", st.countdown.left))}</span><button id="cdGo">Ya</button><button id="cdNo">Cancelar</button></div>` : "";
@@ -1210,6 +1210,7 @@ const ui = (() => {
     const on = (id, fn) => { const el = root.getElementById(id); if (el) el.addEventListener("click", fn); };
     on("pill", () => { st.expanded = !st.expanded; render(); });
     on("min", () => { st.expanded = false; render(); });
+    on("panel", () => { send({ type: "OPEN_PANEL" }); });
     on("stop", () => { stopRequested = true; wakeAll(); log("warn", "Detener pulsado en el panel de la página."); render(); });
     on("copy", async () => {
       try {
