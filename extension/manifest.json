@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MUNDO FUT / Flow Batch Runner",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Automatiza Google Flow: genera las imágenes de un Short, anima cada escena y guarda los vídeos numerados en una carpeta nueva por lote.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "downloads", "tabs", "notifications", "sidePanel", "offscreen", "alarms", "scripting"],
