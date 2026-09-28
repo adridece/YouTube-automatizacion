@@ -70,20 +70,31 @@ function notify(title, message, sticky) {
 
 // ------------------------------------------------ CÓMO SE ABRE LA INTERFAZ
 // Dos modos (panel de la extensión → Opciones avanzadas):
-//  - "sidepanel": panel lateral de Chrome, se queda abierto al lado de Flow.
-//  - "popup": la ventanita típica de extensión bajo el icono (se cierra al
-//    hacer clic fuera; no pasa nada: todo el estado está guardado).
+//  - "popup" (POR DEFECTO desde v2.6): la ventanita típica de extensión bajo
+//    el icono (se cierra al hacer clic fuera; no pasa nada: todo el estado
+//    está guardado). No toca el tamaño de la página de Flow.
+//  - "sidepanel": panel lateral de Chrome. PRUEBA REAL v2.5: al abrirse
+//    ESTRECHA la página de Flow, Flow recoloca sus elementos y la
+//    automatización falla. Solo si el usuario lo elige.
 // Si el panel lateral no funciona en el navegador del usuario (v2.0.1: se le
 // abría como página completa), se pasa solo a "popup".
 const UI_KEY = "fbrUiMode";
 const POPUP_PAGE = "sidepanel.html?modo=popup";
+const UI_MIGRATED_KEY = "fbrUiMode26"; // una sola vez: todos a "popup" al pasar a v2.6
 
 function sidePanelSupported() {
   return !!(chrome.sidePanel && chrome.sidePanel.setPanelBehavior && chrome.sidePanel.open);
 }
 
 async function applyUiMode() {
-  const mode = (await chrome.storage.local.get(UI_KEY))[UI_KEY] || (sidePanelSupported() ? "sidepanel" : "popup");
+  const st = await chrome.storage.local.get([UI_KEY, UI_MIGRATED_KEY]);
+  if (!st[UI_MIGRATED_KEY]) {
+    // v2.6: quien venía del panel lateral pasa a la ventanita (el panel
+    // redimensionaba Flow). Después se respeta lo que elija en Opciones.
+    await chrome.storage.local.set({ [UI_KEY]: "popup", [UI_MIGRATED_KEY]: true });
+    st[UI_KEY] = "popup";
+  }
+  const mode = st[UI_KEY] || "popup";
   if (mode === "popup" || !sidePanelSupported()) {
     await chrome.action.setPopup({ popup: POPUP_PAGE });
     if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});

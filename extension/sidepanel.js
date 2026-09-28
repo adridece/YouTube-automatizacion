@@ -534,7 +534,7 @@ $("uiMode").addEventListener("change", async (e) => {
 
 (async function init() {
   hydrateIcons();
-  $("uiMode").value = (await chrome.storage.local.get("fbrUiMode")).fbrUiMode || (chrome.sidePanel ? "sidepanel" : "popup");
+  $("uiMode").value = (await chrome.storage.local.get("fbrUiMode")).fbrUiMode || "popup";
   $("version").textContent = `v${chrome.runtime.getManifest().version}`;
   await loadForm();
   checks = (await chrome.storage.local.get(CHECK_KEY))[CHECK_KEY] || {};
