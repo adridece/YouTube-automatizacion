@@ -1,6 +1,7 @@
 # Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.6.0)
 
 ## P0 — bloquea el uso real
+00000000000. **Log de la prueba en que la cuenta 2 no generó ningún vídeo** (y la cuenta 1 no descargó el último): pedirlo entero.
 0000000000. **v2.10.3 en real**: ¿cada vídeo se pide UNA sola vez? En el log: "Aprobar" una vez por escena; si algo falla, "Parece que Flow
           no pudo generar… Lo compruebo durante 60 s" y, si el vídeo aparece, "SÍ se generó… NO lo vuelvo a pedir".
 000000000. **v2.10.2 en real**: si un vídeo falla, el log dice "Segunda vuelta automática…" / "Vuelta automática N/6…" y al final sale.

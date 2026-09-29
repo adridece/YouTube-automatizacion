@@ -42,7 +42,10 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (29 sep 2026 — v2.10.3, "Cerezium Autopilot")
+## Estado actual (29 sep 2026 — v2.10.4, "Cerezium Autopilot")
+v2.10.4 (BUG_HISTORY #81): antes de cada envío de vídeo, 20 s de margen y esperar a que el Agent esté libre (el usuario: "dale tiempo a
+la IA"). Pendiente el log de una prueba en que la cuenta 2 no generó ningún vídeo.
+
 v2.10.3 (BUG_HISTORY #80, **prueba real: el mismo vídeo se generaba varias veces**): "salió/falló" se decide CONTANDO vídeos buenos y
 avisos de error (los tiles de Flow no tienen id estable y se redibujan); un fallo se confirma 60 s; antes de reintentar se mira si el
 vídeo llegó tarde. e2e: `realtiles`.
