@@ -149,6 +149,19 @@ async function refreshTabs() {
 chrome.tabs.onUpdated.addListener((id, info) => { if (info.url || info.status === "complete") refreshTabs(); });
 chrome.tabs.onRemoved.addListener(refreshTabs);
 
+// Qué se hace de verdad según lo que trae el kit (v2.9.1): con el modo normal,
+// si solo hay imágenes → solo imágenes; si solo hay animaciones → solo vídeos;
+// si solo hay narración → solo la voz. Así nunca bloquea por lo que falta.
+function effectiveMode(f, images, animations, narration) {
+  const m = f.genMode;
+  if (m !== "paired") return m;
+  if (!images.size && !animations.size) return narration ? "voiceOnly" : m;
+  if (images.size && !animations.size) return "imagesOnly";
+  if (!images.size && animations.size) return "animationsOnly";
+  return m;
+}
+const MODE_TEXT = { paired: "imágenes → vídeos", imagesOnly: "solo imágenes", animationsOnly: "solo vídeos (imágenes ya hechas)", voiceOnly: "solo la voz", dryRun: "ensayo", downloadTest: "prueba de descarga", sendTest: "prueba de envío" };
+
 // Narración para la voz: el campo propio o, si está vacío, la del kit.
 function narrationOf(f) { return (f.narration || "").trim() || extractNarration(f.prompts || "").text; }
 let heygenTab = null;
@@ -170,6 +183,10 @@ function refreshDerived() {
   }
   const narr = narrationOf(f);
   if (narr) chips.push(`<span class="${heygenTab ? "ok" : "warn"}">${icon(heygenTab ? "check" : "alert", 13)}voz: ${narr.split(/\s+/).length} palabras${heygenTab ? " · HeyGen abierto" : " · abre HeyGen"}</span>`);
+  if (images.size || animations.size || narr) {
+    const em = effectiveMode(f, images, animations, narr);
+    chips.push(`<span>${icon("arrow", 13)}se hará: ${MODE_TEXT[em] || em}${narr && em !== "voiceOnly" && heygenTab && !["dryRun", "downloadTest", "sendTest"].includes(em) ? " + voz" : ""}</span>`);
+  }
   $("kitSummary").innerHTML = chips.join("");
 
   // Cuentas
@@ -305,25 +322,33 @@ $("start").addEventListener("click", async () => {
     if (!folderOk.ok) { showMsg(esc(folderOk.error), true); return; }
   }
   const { images, animations } = splitCombinedPrompts(f.prompts);
-  const accs = accounts(f);
+  await refreshHeygen();
+  const narration = narrationOf(f);
+  const mode = effectiveMode(f, images, animations, narration);
+  const voiceOnly = mode === "voiceOnly";
+  const accs = voiceOnly ? [] : accounts(f);
   const problems = [];
-  const needsImages = ["paired", "imagesOnly"].includes(f.genMode);
-  const needsAnims = ["paired", "animationsOnly", "dryRun"].includes(f.genMode);
-  if (needsImages && !images.size) problems.push("No encuentro ningún prompt de imagen en el kit.");
-  if (!accs.length) problems.push("Activa al menos una cuenta.");
-  for (const a of accs) {
-    if (!a.sceneNumbers.length) problems.push(`El rango de la cuenta ${a.label} («${esc(a.range)}») no es válido.`);
-    if (!flowTabs.find((t) => getFlowAccountKey(t.url) === a.accountKey)) problems.push(`No hay ninguna pestaña de Flow abierta con /${a.accountKey.replace("u", "u/")}/.`);
+  const needsImages = ["paired", "imagesOnly"].includes(mode);
+  const needsAnims = ["paired", "animationsOnly", "dryRun"].includes(mode);
+  if (voiceOnly) {
+    if (!narration) problems.push("No hay narración: pégala en el kit (encabezado «NARRACIÓN») o en «Narración para la voz».");
+    if (!heygenTab) problems.push("Para la voz hace falta tener abierta tu pestaña de HeyGen (proyecto con el panel de voz).");
+  } else {
+    if (!images.size && !animations.size && !narration) problems.push("El kit está vacío: pega los prompts y/o la narración.");
+    if (needsImages && !images.size) problems.push("No encuentro ningún prompt de imagen en el kit.");
+    if (!accs.length) problems.push("Activa al menos una cuenta.");
+    for (const a of accs) {
+      if (!a.sceneNumbers.length) problems.push(`El rango de la cuenta ${a.label} («${esc(a.range)}») no es válido.`);
+      if (!flowTabs.find((t) => getFlowAccountKey(t.url) === a.accountKey)) problems.push(`No hay ninguna pestaña de Flow abierta con /${a.accountKey.replace("u", "u/")}/.`);
+    }
+    if (needsAnims && !animations.size) problems.push("El kit no trae prompts de animación (el 2.º bloque [001]…).");
   }
-  if (needsAnims && !animations.size) problems.push("El kit no trae prompts de animación (el 2.º bloque [001]…).");
   if (problems.length) { showMsg(problems.map(esc).join("<br>"), true); return; }
 
   const notArmed = accs.filter((a) => { const t = flowTabs.find((x) => getFlowAccountKey(x.url) === a.accountKey); return !t || !armedTabs[t.id]; });
-  await refreshHeygen();
-  const narration = narrationOf(f);
   const warns = [];
   if (notArmed.length) warns.push(`Sin preparar para segundo plano: ${notArmed.map((a) => a.accountKey.replace("u", "/u/") + "/").join(", ")}. Entra en esa pestaña y pulsa la cereza una vez; si no, Flow puede pararse cuando no la mires.`);
-  if (narration && !heygenTab) warns.push("Hay narración pero no hay ninguna pestaña de HeyGen abierta: NO se generará la voz (audio.mp3). Abre tu proyecto de HeyGen si la quieres.");
+  if (!voiceOnly && narration && !heygenTab) warns.push("Hay narración pero no hay ninguna pestaña de HeyGen abierta: NO se generará la voz (audio.mp3). Abre tu proyecto de HeyGen si la quieres.");
   if (warns.length && !startAnyway) {
     startAnyway = true;
     $("start").innerHTML = `${icon("play", 16)}Iniciar de todas formas`;
@@ -339,7 +364,7 @@ $("start").addEventListener("click", async () => {
   const steps = accs.map((a) => ({
     accountKey: a.accountKey,
     run: {
-      genMode: f.genMode,
+      genMode: mode,
       images: Object.fromEntries(images),
       animations: Object.fromEntries(animations),
       sceneNumbers: a.sceneNumbers,
@@ -354,10 +379,11 @@ $("start").addEventListener("click", async () => {
     },
   }));
   await saveForm();
-  const voice = narration && heygenTab && !["dryRun", "downloadTest", "sendTest"].includes(f.genMode) ? { text: narration, batchFolder, destMode: f.dest } : null;
+  const voice = narration && heygenTab && !["dryRun", "downloadTest", "sendTest"].includes(mode) ? { text: narration, batchFolder, destMode: f.dest } : null;
   await chrome.runtime.sendMessage({ type: "RUN_PLAN", plan: { parallel: f.runMode !== "sequential", steps, voice } });
-  if (unchecked.length) toast(`Lanzado. Ojo: ${unchecked.length} punto(s) del checklist sin marcar.`);
-  else toast("Lote lanzado");
+  if (voiceOnly) toast("Generando solo la voz en HeyGen");
+  else if (unchecked.length) toast(`Lanzado (${MODE_TEXT[mode] || mode}). Ojo: ${unchecked.length} punto(s) del checklist sin marcar.`);
+  else toast(`Lote lanzado (${MODE_TEXT[mode] || mode}${voice ? " + voz" : ""})`);
   showTab("progreso");
 });
 
