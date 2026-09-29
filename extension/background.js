@@ -952,7 +952,15 @@ async function runVoiceInner(v) {
     // 4) Esperar la voz. Si en 90 s no aparece, RECARGAR la página de HeyGen
     //    (idea del usuario: al recargar, el audio ya generado sale en la red).
     //    Recargar no gasta previsualizaciones; nunca se vuelve a pulsar play.
-    let found = await waitVoice(since, 90, "Tras pulsar reproducir");
+    // Receta del usuario (29 sep 2026): dejarlo sonar ~10 s y volver a pulsar
+    // el mismo botón para PARARLO; entonces la voz aparece en Network → Media.
+    let found = await waitVoice(since, 10, "Tras pulsar reproducir");
+    if (!found) {
+      const t = await sendToHeygen(tabId, { type: "HG_TOGGLE" }).catch((e) => ({ ok: false, error: e.message }));
+      vlog("info", t && t.ok ? "Han pasado 10 s sonando: vuelvo a pulsar el botón para PARAR la reproducción (no gasta previsualización), así la voz aparece en la red." : `No pude pulsar para parar la reproducción (${(t && t.error) || "sin respuesta"}).`);
+      await setVoiceState({ msg: "Parando la reproducción y recogiendo el audio…" });
+      found = await waitVoice(since, 80, "Tras parar la reproducción");
+    }
     const tryReload = async (why) => {
       vlog("info", `${why} Recargo la página de HeyGen para que cargue el audio ya generado (no gasta previsualizaciones)…`);
       await setVoiceState({ msg: "Recargando HeyGen para recoger el audio…" });
@@ -966,7 +974,7 @@ async function runVoiceInner(v) {
       await listen().catch(() => {});
       return waitVoice(since2, 120, "Tras recargar");
     };
-    if (!found) found = await tryReload(`En 90 s no apareció la voz en la red (vi: ${describe(seen(since)) || "nada"}).`);
+    if (!found) found = await tryReload(`Tras reproducir y parar, la voz no apareció en la red (vi: ${describe(seen(since)) || "nada"}).`);
     if (!found) return { ok: false, error: `pulsé reproducir una vez y recargué la página, pero no apareció el audio (id=…) en la red. No vuelvo a pulsar para no gastar otra previsualización (usadas hoy: ${used}/${PREVIEW_MAX}). Pásame el log.` };
     vlog("info", `Voz detectada (${found.via || "red"}): ${found.url.slice(0, 100)}${found.url.length > 100 ? "…" : ""} · ${found.status || "?"}${found.mime ? " · " + found.mime : ""}`);
     await setVoiceState({ msg: "Guardando el audio…" });

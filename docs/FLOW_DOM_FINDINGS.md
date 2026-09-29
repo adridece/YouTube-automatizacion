@@ -139,6 +139,7 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
   > div.tw-relative.tw-flex.tw-flex-row.tw-items-center.tw-gap-3 > div:nth-child(1) > div`.
 - Al reproducir aparece una petición nueva de tipo **Media** en la red: ese es el audio que se guarda (audio.mp3).
 - **[V por el usuario, 29 sep, captura de Network]** Tras pulsar play: `appear_v1.webm` y `disappear_v1.webm` (206, media, desde caché de disco: animaciones de la interfaz) y la VOZ `id=98f62577-89f0-49…` (206, media, ~88 kB). Si no aparece, **al recargar la página sí aparece** la voz.
+- **[V por el usuario, 29 sep, v2.9.4]** La voz aparece en Network → Media al **parar** la reproducción: play → ~10 s → pulsar otra vez el mismo botón.
 - **[V por el usuario, 29 sep]** HeyGen solo deja **previsualizar la voz 3 veces al día**; sin previsualización no hay audio en la red.
 - **[V por el usuario, 29 sep]** El botón exacto es el `<button>` dentro de ese div (`… > div:nth-child(1) > div > button`).
 - **[V-indirecto, log v2.9.1]** Tras pegar, el guion muestra la narración con otro formato (no idéntico carácter a carácter).
