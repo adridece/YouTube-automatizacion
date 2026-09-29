@@ -42,7 +42,11 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (29 sep 2026 — v2.10.0, "Cerezium Autopilot")
+## Estado actual (29 sep 2026 — v2.10.1, "Cerezium Autopilot")
+**Prueba real v2.10.0: la música de Mureka funciona** (y la voz de HeyGen funcionó a las 10:08). v2.10.1 (BUG_HISTORY #78): un vídeo
+que Flow falla deja un tile SIN vídeo → se reconoce como fallo y se reintenta (antes se daba por bueno y la descarga se colgaba);
+si falta el botón de generar tras las imágenes se espera y no se re-adjunta la imagen. e2e: `videoerror`, `busyagent`.
+
 v2.10: **música de Mureka** (`mureka.js` + `runMusic`): prompt → generar UNA vez → Library → play → archivo «music…» de la red →
 `musica.mp3` en la carpeta del lote (BUG_HISTORY #77, SIN VERIFICAR en Mureka real). e2e: `music`, `musiconly`; e2e:bg `musicbg`.
 
@@ -103,6 +107,7 @@ sin foco → v2.4: rotación de formas de escribir/enviar. **Prueba real v2.4.0*
 - **Nunca regenerar solo un vídeo cuyo coste ya se aprobó** (se marca "revisar"): repetirlo puede cobrar dos veces.
 - **El vídeo de una escena se identifica por diferencia de tiles** (antes/después), nunca por posición en el DOM ni por el
   nombre (el Agent renombra mal los vídeos). Se descarga **en cuanto aparece**, y nunca hay dos vídeos generándose a la vez.
+- **Un tile de vídeo SIN fuente de vídeo no es un vídeo terminado** (puede ser el aviso de error de Flow): se espera o se trata como fallo.
 - **Nunca enviar un prompt de vídeo sin comprobar que su imagen quedó adjunta** (podría cobrar un vídeo sin referencia).
 - **HeyGen: pulsar reproducir UNA sola vez por lote** (máx. 3 previsualizaciones al día): nunca reintentar el clic. A los 10 s se pulsa
   el mismo botón UNA vez para parar (así sale la voz en la red; parar no gasta). Sin recargar. HeyGen se prepara para

@@ -1,6 +1,9 @@
 # Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.6.0)
 
 ## P0 — bloquea el uso real
+00000000. **v2.10.1 en real**: (a) si un vídeo falla en Flow, el log dice "Flow dice que no se ha podido generar… Reintento" y NO se
+         queda descargando; (b) captura del tile de ERROR de un vídeo (para saber su texto exacto); (c) si aparece "El tile nuevo
+         aún no tiene vídeo (dice: «…»)", pasarme esa línea.
 0000000. **v2.10 música en Mureka real**: pestaña www.mureka.ai/create con sesión, cereza en ella, prompt bajo «MÚSICA» → ¿se escribe,
         se pulsa generar UNA vez, espera, Library, play y aparece `musica.mp3`? Si no: log (líneas [music]/«Música») + captura de Library
         mientras genera y cuando ya está.
