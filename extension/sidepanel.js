@@ -83,7 +83,7 @@ TABS.forEach((t, i) => {
 
 // ------------------------------------------------------------ FORMULARIO
 const FORM_KEY = "fbrForm";
-const FIELDS = ["prompts", "accA_on", "accA_num", "accA_range", "accA_res", "accB_on", "accB_num", "accB_range", "accB_res", "nameFormat", "prefix", "genMode", "maxWait", "maxRetries", "autoRun"];
+const FIELDS = ["prompts", "narration", "accA_on", "accA_num", "accA_range", "accA_res", "accB_on", "accB_num", "accB_range", "accB_res", "nameFormat", "prefix", "genMode", "maxWait", "maxRetries", "autoRun"];
 function radio(name) { const r = document.querySelector(`input[name="${name}"]:checked`); return r ? r.value : null; }
 function setRadio(name, v) { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; }
 
@@ -141,6 +141,7 @@ async function armActiveFlowTab() {
 }
 async function refreshTabs() {
   flowTabs = await chrome.tabs.query({ url: ["https://flow.google.com/*", "https://labs.google/fx/tools/flow/*"] });
+  await refreshHeygen();
   const keys = [...new Set(flowTabs.map((t) => getFlowAccountKey(t.url)))];
   $("tabsFound").textContent = keys.length ? `Abiertas: ${keys.map((k) => k.replace("u", "/u/") + "/").join(" ")}` : "Ninguna pestaña de Flow abierta";
   refreshDerived();
@@ -148,6 +149,13 @@ async function refreshTabs() {
 chrome.tabs.onUpdated.addListener((id, info) => { if (info.url || info.status === "complete") refreshTabs(); });
 chrome.tabs.onRemoved.addListener(refreshTabs);
 
+// Narración para la voz: el campo propio o, si está vacío, la del kit.
+function narrationOf(f) { return (f.narration || "").trim() || extractNarration(f.prompts || "").text; }
+let heygenTab = null;
+async function refreshHeygen() {
+  const t = await chrome.tabs.query({ url: "https://app.heygen.com/*" }).catch(() => []);
+  heygenTab = t.find((x) => /\/create/.test(x.url || "")) || t[0] || null;
+}
 function refreshDerived() {
   const f = readForm();
   // Kit
@@ -160,6 +168,8 @@ function refreshDerived() {
     const noAnim = [...images.keys()].filter((n) => !animations.has(n));
     if (animations.size && noAnim.length) chips.push(`<span class="warn">${icon("alert", 13)}sin animación: ${noAnim.map(pad3).join(", ")}</span>`);
   }
+  const narr = narrationOf(f);
+  if (narr) chips.push(`<span class="${heygenTab ? "ok" : "warn"}">${icon(heygenTab ? "check" : "alert", 13)}voz: ${narr.split(/\s+/).length} palabras${heygenTab ? " · HeyGen abierto" : " · abre HeyGen"}</span>`);
   $("kitSummary").innerHTML = chips.join("");
 
   // Cuentas
@@ -309,10 +319,15 @@ $("start").addEventListener("click", async () => {
   if (problems.length) { showMsg(problems.map(esc).join("<br>"), true); return; }
 
   const notArmed = accs.filter((a) => { const t = flowTabs.find((x) => getFlowAccountKey(x.url) === a.accountKey); return !t || !armedTabs[t.id]; });
-  if (notArmed.length && !startAnyway) {
+  await refreshHeygen();
+  const narration = narrationOf(f);
+  const warns = [];
+  if (notArmed.length) warns.push(`Sin preparar para segundo plano: ${notArmed.map((a) => a.accountKey.replace("u", "/u/") + "/").join(", ")}. Entra en esa pestaña y pulsa la cereza una vez; si no, Flow puede pararse cuando no la mires.`);
+  if (narration && !heygenTab) warns.push("Hay narración pero no hay ninguna pestaña de HeyGen abierta: NO se generará la voz (audio.mp3). Abre tu proyecto de HeyGen si la quieres.");
+  if (warns.length && !startAnyway) {
     startAnyway = true;
     $("start").innerHTML = `${icon("play", 16)}Iniciar de todas formas`;
-    showMsg(`Sin preparar para segundo plano: ${notArmed.map((a) => a.accountKey.replace("u", "/u/") + "/").join(", ")}. Entra en esa pestaña y pulsa la cereza una vez; si no, Flow puede pararse cuando no la mires.`);
+    showMsg(warns.map(esc).join("<br>"));
     return;
   }
   startAnyway = false;
@@ -339,7 +354,8 @@ $("start").addEventListener("click", async () => {
     },
   }));
   await saveForm();
-  await chrome.runtime.sendMessage({ type: "RUN_PLAN", plan: { parallel: f.runMode !== "sequential", steps } });
+  const voice = narration && heygenTab && !["dryRun", "downloadTest", "sendTest"].includes(f.genMode) ? { text: narration, batchFolder, destMode: f.dest } : null;
+  await chrome.runtime.sendMessage({ type: "RUN_PLAN", plan: { parallel: f.runMode !== "sequential", steps, voice } });
   if (unchecked.length) toast(`Lanzado. Ojo: ${unchecked.length} punto(s) del checklist sin marcar.`);
   else toast("Lote lanzado");
   showTab("progreso");
