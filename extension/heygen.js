@@ -223,6 +223,12 @@ function blobToBase64(blob) {
   });
 }
 
+// ¿Suena algo ahora en la página? (lo publica page-hook.js). -1 = no se sabe.
+function playingNow() {
+  const v = document.documentElement.getAttribute("data-fbr-playing");
+  return v == null ? -1 : parseInt(v, 10) || 0;
+}
+
 // SEGUNDO PLANO (igual que en Flow): mientras la extensión trabaja aquí, la
 // página "cree" estar visible y sus animaciones/fotogramas avanzan aunque el
 // usuario mire otra pestaña (page-hook.js, mundo de la página).
@@ -246,15 +252,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
+  if (msg.type === "HG_PLAYING") { sendResponse({ ok: true, playing: playingNow() }); return false; }
   if (msg.type === "HG_TOGGLE") {
-    // PARAR la reproducción (mismo botón). Receta del usuario (29 sep 2026):
-    // play → ~10 s sonando → volver a pulsar para parar → la voz sale en Network.
-    // Parar no gasta previsualización.
+    // PARAR la reproducción con el mismo botón (receta del usuario: play →
+    // ~10 s sonando → volver a pulsar → la voz sale en Network → Media).
+    // Se COMPRUEBA que ha dejado de sonar; si sigue sonando, se prueba otra
+    // forma de pulsar. Nunca se pulsa si ya no suena (volvería a reproducir).
     (async () => {
-      const hit = findPlayButton();
-      if (!hit) throw new Error("no encuentro el botón de reproducir para pararlo");
-      const p = await clickPlay();
-      return { ok: true, ...p };
+      const before = playingNow();
+      if (before === 0 && msg.everPlayed) return { ok: true, skipped: true, before, after: 0 };
+      const tries = [];
+      for (const plain of [false, true, "keys"]) {
+        const hit = findPlayButton();
+        if (!hit) throw new Error("no encuentro el botón de reproducir para pararlo");
+        if (plain === "keys") { hit.el.focus(); hit.el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); hit.el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true })); tries.push("teclado"); }
+        else { const p = await clickPlay(plain); tries.push(p.real ? "clic real" : "clic normal"); }
+        await sleep(1500);
+        const now = playingNow();
+        // Sin forma de saber si suena (-1): se confía en el primer clic.
+        if (now <= 0) return { ok: true, before, after: now, tries };
+      }
+      return { ok: true, before, after: playingNow(), tries, stillPlaying: true };
     })().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }

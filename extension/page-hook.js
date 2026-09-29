@@ -37,6 +37,44 @@
     return origRevoke(url);
   };
 
+  // -------------------------------------------- ¿está sonando algo? (HeyGen)
+  // La extensión necesita saber si la previsualización de la voz SIGUE sonando
+  // después de pulsar "parar" (v2.9.8). Se cuentan los <audio>/<video> y los
+  // sonidos de WebAudio en marcha y se publica en <html data-fbr-playing="N">.
+  try {
+    const live = new Set();
+    const publish = () => { try { document.documentElement.setAttribute("data-fbr-playing", String(live.size)); } catch (e) {} };
+    const watchEl = (el) => {
+      if (el.__fbrWatched) return;
+      el.__fbrWatched = true;
+      el.addEventListener("playing", () => { live.add(el); publish(); });
+      for (const t of ["pause", "ended", "emptied", "abort", "error"]) el.addEventListener(t, () => { live.delete(el); publish(); });
+    };
+    const origPlay = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () { watchEl(this); return origPlay.apply(this, arguments); };
+    if (window.AudioBufferSourceNode) {
+      const origStart = AudioBufferSourceNode.prototype.start;
+      const origStop = AudioBufferSourceNode.prototype.stop;
+      AudioBufferSourceNode.prototype.start = function () {
+        live.add(this); publish();
+        this.addEventListener("ended", () => { live.delete(this); publish(); });
+        return origStart.apply(this, arguments);
+      };
+      AudioBufferSourceNode.prototype.stop = function () { live.delete(this); publish(); return origStop.apply(this, arguments); };
+    }
+    if (window.OscillatorNode) {
+      const oStart = OscillatorNode.prototype.start;
+      const oStop = OscillatorNode.prototype.stop;
+      OscillatorNode.prototype.start = function () { live.add(this); publish(); this.addEventListener("ended", () => { live.delete(this); publish(); }); return oStart.apply(this, arguments); };
+      OscillatorNode.prototype.stop = function () { live.delete(this); publish(); return oStop.apply(this, arguments); };
+    }
+    // Contexto de audio suspendido/cerrado = no suena.
+    if (window.AudioContext) {
+      const oSusp = AudioContext.prototype.suspend;
+      AudioContext.prototype.suspend = function () { live.forEach((n) => { if (n.context === this) live.delete(n); }); publish(); return oSusp.apply(this, arguments); };
+    }
+  } catch (e) {}
+
   // --------------------------------------------------------- segundo plano
   let active = false;
   const hiddenDesc = Object.getOwnPropertyDescriptor(Document.prototype, "hidden");

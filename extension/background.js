@@ -947,13 +947,24 @@ async function runVoiceInner(v) {
     //    pulsar el MISMO botón para PARARLO; entonces la voz aparece en
     //    Network → Media ("id=…"). Parar no gasta previsualización; nunca se
     //    vuelve a pulsar play para generar otra vez, y no hace falta recargar.
-    let found = await waitVoice(since, 10, "Tras pulsar reproducir");
-    if (!found) {
-      const t = await sendToHeygen(tabId, { type: "HG_TOGGLE" }).catch((e) => ({ ok: false, error: e.message }));
-      vlog("info", t && t.ok ? `Han pasado 10 s sonando: pulso otra vez el botón para PARAR (${t.real ? "clic real" : "clic normal"}; no gasta previsualización), así la voz aparece en la red.` : `No pude pulsar para parar la reproducción (${(t && t.error) || "sin respuesta"}).`);
-      await setVoiceState({ msg: "Parando la reproducción y recogiendo el audio…" });
-      found = await waitVoice(since, 90, "Tras parar la reproducción");
+    // Se deja sonar 10 s (con la red escuchando desde ANTES de pulsar play,
+    // como DevTools abierto) y SIEMPRE se para con el mismo botón.
+    let everPlayed = false;
+    for (let i = 0; i < 10; i++) {
+      await new Promise((res) => setTimeout(res, 1000));
+      const pl = await sendToHeygen(tabId, { type: "HG_PLAYING" }).catch(() => null);
+      if (pl && pl.playing > 0) everPlayed = true;
     }
+    const stopAt = Date.now();
+    const t = await sendToHeygen(tabId, { type: "HG_TOGGLE", everPlayed }).catch((e) => ({ ok: false, error: e.message }));
+    if (!t || !t.ok) vlog("warn", `No pude pulsar para parar la reproducción (${(t && t.error) || "sin respuesta"}).`);
+    else if (t.skipped) vlog("info", "A los 10 s la previsualización ya había terminado de sonar: no pulso (volvería a reproducirla).");
+    else vlog(t.stillPlaying ? "warn" : "info", `10 s sonando → pulso el botón para PARAR (${(t.tries || []).join(" → ")}). ${t.after === -1 ? "No puedo comprobar si sonaba." : t.stillPlaying ? "¡Sigue sonando! No insisto más para no reproducir otra vez." : `Parado ✓ (sonaba: ${t.before === -1 ? "?" : t.before > 0 ? "sí" : "no"}).`}`);
+    await setVoiceState({ msg: "Parada la reproducción: recogiendo el audio…" });
+    // La voz aparece al PARAR: primero se busca lo que llega después de parar;
+    // si no llega nada nuevo, lo visto mientras sonaba.
+    let found = await waitVoice(stopAt, 60, "Tras parar la reproducción");
+    if (!found) found = pickVoiceMedia(seen(since));
     if (!found) return { ok: false, error: `pulsé reproducir, esperé 10 s y la paré, pero no apareció el audio (id=…) en la red (vi: ${describe(seen(since)) || "nada"}). No vuelvo a pulsar para no gastar otra previsualización. Pásame el log.` };
     vlog("info", `Voz detectada (${found.via || "red"}): ${found.url.slice(0, 100)}${found.url.length > 100 ? "…" : ""} · ${found.status || "?"}${found.mime ? " · " + found.mime : ""}`);
     await setVoiceState({ msg: "Guardando el audio…" });
