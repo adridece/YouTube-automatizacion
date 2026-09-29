@@ -64,7 +64,7 @@ const CONFIG = {
   assetListWaitMs: 10000,
   agentReplyIdleMs: 180000, // el Agent contestó y lleva 3 min sin hacer nada → se reintenta
   rateLimitMaxRetries: 4,
-  download: { createdTimeoutMs: 180000, completeTimeoutMs: 300000, attempts: 3 },
+  download: { createdTimeoutMs: 90000, completeTimeoutMs: 300000, attempts: 3 },
   maxAttemptsPerScene: 6, // por defecto; se cambia en el panel (Opciones avanzadas)
 };
 
@@ -477,11 +477,18 @@ function sendDiag(genBtn) {
 }
 
 async function sendAndConfirm({ maxPoints, onApproved, dryRun, onlySend }) {
-  const genBtn = $(CONFIG.generateButtonSelector);
-  if (!genBtn) return { type: "error", error: "no encuentro el botón de generar (flow-agent-panel flow-generate-icon-button)" };
+  // Prueba real v2.10 (cuenta 2, justo tras las imágenes): el Agent seguía
+  // trabajando y el botón de generar no estaba. Se espera a que vuelva.
+  // notSent: nada salió, la imagen adjunta sigue en la caja (no re-adjuntarla).
+  let genBtn = $(CONFIG.generateButtonSelector);
+  if (!genBtn) {
+    log("info", "El botón de generar no está (el Agent aún está trabajando): espero a que vuelva, hasta 2 min…");
+    genBtn = await tryWait(() => $(CONFIG.generateButtonSelector), 120000, "el botón de generar");
+    if (!genBtn) return { type: "error", notSent: true, error: "no encuentro el botón de generar (flow-agent-panel flow-generate-icon-button) tras esperar 2 min" };
+  }
   if (isDisabledBtn(genBtn)) {
-    const ok = await tryWait(() => !isDisabledBtn(genBtn), 15000, "a que se habilite el botón de generar");
-    if (!ok) return { type: "error", error: "el botón de generar sigue deshabilitado tras 15 s (¿Flow sigue ocupado?)" };
+    const ok = await tryWait(() => !isDisabledBtn(genBtn), 60000, "a que se habilite el botón de generar");
+    if (!ok) return { type: "error", notSent: true, error: "el botón de generar sigue deshabilitado tras 60 s (¿Flow sigue ocupado?)" };
   }
   // Un aviso de coste que YA estaba pendiente antes de enviar no es de esta
   // petición (duplicado o viejo): se rechaza para no aprobarlo por error.
@@ -890,7 +897,14 @@ function videoSrcOf(tile) {
   const list = [v.currentSrc, v.src, ...$$("source", v).map((x) => x.src)].filter(Boolean);
   return list.find((u) => /^(https:|blob:)/.test(u)) || null;
 }
-function isErrorTile(t) { return /no se ha podido generar/i.test(t.textContent || ""); }
+function isErrorTile(t) { return tileLooksFailed(t.textContent || ""); }
+// Pasa el ratón (sintético) por encima del tile: Flow puede cargar el <video> al hacerlo.
+function hoverTile(t) {
+  for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "mousemove"]) {
+    try { t.dispatchEvent(new MouseEvent(type, { bubbles: type !== "mouseenter" && type !== "pointerenter", cancelable: true, view: window })); } catch (e) {}
+  }
+}
+const tileText = (t) => String((t && t.textContent) || "").replace(/\s+/g, " ").trim().slice(0, 120);
 function freshVideoTiles(beforeKeys, excludeKeys) {
   const before = new Set(beforeKeys || []);
   const ex = new Set(excludeKeys || []);
@@ -902,6 +916,8 @@ async function waitForSceneVideo(sendRes, maxWaitMs) {
   let lastInProgressNote = 0;
   let readyKey = null;
   let readySince = 0;
+  let lastHover = 0;
+  let noSrcLogged = false;
   const cond = () => {
     rejectStrayCostDialogs("mientras se generaba el vídeo");
     const sig = detectNewSignals(sendRes.textBefore, agentPanelText());
@@ -925,7 +941,16 @@ async function waitForSceneVideo(sendRes, maxWaitMs) {
     const el = ready.find((t) => tileKey(t) === pick.key);
     if (!el) return null;
     if (pick.key !== readyKey) { readyKey = pick.key; readySince = Date.now(); return null; }
-    const need = videoSrcOf(el) ? 5000 : 20000;
+    const src = videoSrcOf(el);
+    if (!src) {
+      // Prueba real v2.10: un tile SIN vídeo dado por bueno a los 27 s era un
+      // fallo de Flow (no se descargaba nada). Sin fuente de vídeo: si el Agent
+      // dijo que falló → fallo (gratis); si no, se espera más y se pasa el ratón.
+      if (sig.genError) return { error: "genError" };
+      if (Date.now() - lastHover > 5000) { lastHover = Date.now(); hoverTile(el); }
+      if (!noSrcLogged && Date.now() - readySince > 20000) { noSrcLogged = true; log("info", `El tile nuevo aún no tiene vídeo (dice: «${tileText(el)}»); espero a que Flow lo termine de verdad…`); }
+    }
+    const need = src ? 5000 : 90000;
     if (Date.now() - readySince < need) return null;
     return { key: pick.key, el, ambiguous: pick.ambiguous, count: ready.length };
   };
@@ -1383,8 +1408,10 @@ async function downloadScene(n, kind, cfg) {
     // Plan de intentos: menú (resolución elegida) → menú → fuente directa →
     // menú a 720p → fuente directa. Entre intentos se espera cada vez más y
     // el tile se vuelve a buscar desde cero.
-    const plan = kind === "video" ? ["menu", "menu", "source", "menu720", "source"] : ["menu", "menu", "menu"];
-    const waits = [0, 8000, 15000, 25000, 30000];
+    // v2.10.1: si el menú no entrega nada en 90 s, enseguida la fuente directa
+    // (no se tiene a la otra cuenta esperando turno 15 min).
+    const plan = kind === "video" ? ["menu", "source", "menu720", "menu", "source"] : ["menu", "menu", "menu"];
+    const waits = [0, 5000, 10000, 20000, 30000];
     for (let i = 0; i < plan.length; i++) {
       const how = plan[i];
       try {
@@ -1396,6 +1423,8 @@ async function downloadScene(n, kind, cfg) {
         }
         const tile = kind === "video" ? await findVideoTileForScene(n) : await findWithScroll(() => findImageTileByLabel(pad3(n)), CONFIG.imageTileTag);
         if (!tile) throw new Error(kind === "video" ? "no encuentro el vídeo de esta escena en la cuadrícula" : "no encuentro la imagen");
+        if (kind === "video" && isErrorTile(tile)) { const err = new Error(`el tile de esta escena es un ERROR de Flow, no un vídeo («${tileText(tile)}»)`); err.noRetry = true; throw err; }
+        if (kind === "video" && !videoSrcOf(tile)) { hoverTile(tile); await sleep(1500); }
         let r;
         if (how === "source") r = await downloadViaSource(n, tile, cfg, destModeCache);
         else {
@@ -1420,7 +1449,8 @@ async function downloadScene(n, kind, cfg) {
           log("error", `No puedo escribir en la carpeta elegida (${e.message}). Paso a guardar en Descargas/MundoFutFlow/${cfg.batchFolder}/ (si tienes "Preguntar dónde guardar" activado, Chrome preguntará).`);
           send({ type: "NOTIFY", title: "Sin permiso en la carpeta elegida", message: "Guardo en Descargas/MundoFutFlow. Abre el panel de la extensión y pulsa «Conceder acceso» para la próxima vez.", sticky: true });
         }
-        log("warn", `Descarga fallida (intento ${i + 1}/${plan.length}, ${how === "source" ? "fuente directa" : "menú"}): ${e.message}`);
+        const t0 = kind === "video" ? videoElByScene.get(n) : null;
+        log("warn", `Descarga fallida (intento ${i + 1}/${plan.length}, ${how === "source" ? "fuente directa" : "menú"}): ${e.message}${t0 && t0.isConnected && !videoSrcOf(t0) ? ` · el tile no tiene vídeo (dice: «${tileText(t0)}»)` : ""}`);
         if (e.noRetry) break;
       }
     }

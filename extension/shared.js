@@ -451,6 +451,11 @@ function buildVideoTileName(prefix, num, batchFolder) {
 }
 
 // ¿Un tile de vídeo sigue procesándose? (muestra "57%", "100%", "Generando"…)
+// ¿El tile es una tarjeta de ERROR de Flow y no un resultado? [V] "No se ha
+// podido generar…"; el resto [SUPUESTO] (prueba real v2.10: errores en el vídeo).
+function tileLooksFailed(text) {
+  return /no se ha podido generar|no se te ha cobrado|algo (ha )?(ido|salido) mal|se ha producido un error|ha fallado|couldn.?t generate|something went wrong|generation failed|(^|[^a-záéíóúñ])error/i.test(String(text || ""));
+}
 function tileLooksInProgress(text) {
   return /\b\d{1,3}\s?%|generando|en cola|procesando|preparando/i.test(String(text || ""));
 }

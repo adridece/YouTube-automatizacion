@@ -159,6 +159,17 @@ function genImages(text) {
       const nm = (P.get("imgName") || "{n}").replace("{n}", n);
       setTimeout(() => { t.querySelector(".footer-title").textContent = nm; assets.unshift({ name: nm, kind: "Imagen", tile: t }); }, T.rename);
     });
+    // busyAfterImages=MS (prueba real v2.10, cuenta 2): al terminar las imágenes el Agent sigue
+    // "trabajando" MS ms: el botón de generar no está (sale el de parar).
+    if (P.get("busyAfterImages") && !window.__busyDone) {
+      window.__busyDone = true;
+      const gb = document.querySelector("flow-generate-icon-button");
+      setTimeout(() => {
+        const stop = document.createElement("flow-stop-button"); stop.innerHTML = "<button type=button>■</button>";
+        gb.replaceWith(stop);
+        setTimeout(() => stop.replaceWith(gb), +P.get("busyAfterImages"));
+      }, T.rename + 50);
+    }
   }, T.image);
 }
 
@@ -208,6 +219,14 @@ function startVideo(text, label) {
         if (ph) ph.remove();
         if (ph) setTimeout(rerenderVideos, 400); // SIM: Flow redibuja la cuadrícula (tiles NUEVOS, mismos vídeos)
         if (P.get("policyVideo") && videoSends <= +P.get("policyVideo")) { say("Esta generación de vídeo fue bloqueada por nuestras políticas de seguridad. No se te ha cobrado."); sessionStorage.setItem("mockPendingVideo", "0"); return; }
+        // videoErrorTile=N (prueba real v2.10): los N primeros vídeos FALLAN en Flow: queda un tile de
+        // vídeo SIN vídeo con un aviso de error (y su menú "Descargar" no entrega nada).
+        if (+(P.get("videoErrorTile") || 0) >= videoSends) {
+          sessionStorage.setItem("mockPendingVideo", "0");
+          const et = addTile("flow-video-tile", "errorAlgo ha ido mal. Inténtalo de nuevo");
+          et.querySelector("video").remove(); et.dataset.failed = "1";
+          return;
+        }
         if (!P.get("hiddenStall")) { sessionStorage.setItem("mockPendingVideo", "0"); finalizeVideo(wantName, label); return; }
         // SIM del problema real: se queda "100%" y solo termina con la página
         // visible y fotogramas (rAF); al terminar se redibuja como tile NUEVO.
@@ -249,7 +268,10 @@ document.getElementById("plus").addEventListener("click", () => {
   // más desfavorable de lo que podría hacer la lista virtual de Flow).
   const paint = P.get("rafList") ? (fn) => setTimeout(() => requestAnimationFrame(fn), 600) : (fn) => setTimeout(fn, 600);
   paint(() => {
+    // SIM (prueba real v2.10): las imágenes YA adjuntas no salen en la lista del "+".
+    const inBox = new Set([...attachRow.children].map((c) => c.dataset.label));
     for (const a of assets) {
+      if (inBox.has(a.name)) continue;
       const it = document.createElement("flow-add-menu-asset-item");
       it.textContent = a.name + a.kind;
       it.addEventListener("click", () => {
@@ -298,6 +320,7 @@ grid.addEventListener("contextmenu", (e) => {
   menu.querySelectorAll("flow-menu-item").forEach((mi) => mi.addEventListener("click", () => {
     const t = mi.textContent;
     if (t === "Animar" && broken()) return closeOverlay();
+    if (t === "Animar" && [...attachRow.children].some((c) => c.dataset.label === tile.querySelector(".footer-title").textContent)) return closeOverlay(); // ya adjunta: no cambia nada
     if (t === "Animar") { const c = document.createElement("div"); c.className = "attached"; c.dataset.label = tile.querySelector(".footer-title").textContent; attachRow.appendChild(c); closeOverlay(); return; }
     if (t !== "downloadDescargar") return closeOverlay();
     const sub = document.createElement("div"); sub.className = "ctx"; sub.style.left = e.clientX + 170 + "px"; sub.style.top = e.clientY + "px";
@@ -306,6 +329,7 @@ grid.addEventListener("contextmenu", (e) => {
     overlay.appendChild(sub);
     sub.querySelectorAll("flow-menu-item").forEach((o) => o.addEventListener("click", () => {
       closeOverlay();
+      if (tile.dataset.failed) return; // SIM: un tile de error no entrega nada
       // SIM: Flow prepara el archivo y lo entrega como blob con un nombre suyo,
       // liberando la URL al instante (el caso más difícil para la extensión).
       setTimeout(async () => {

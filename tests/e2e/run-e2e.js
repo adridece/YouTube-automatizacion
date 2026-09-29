@@ -101,6 +101,18 @@ const SCENARIOS = {
     u2: "wrongRename=1&shuffle=1", u3: "wrongRename=1&shuffle=1",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true },
   },
+  videoerror: {
+    desc: "PRUEBA REAL v2.10: el 1.er vídeo de cada cuenta FALLA en Flow (tile de error, sin vídeo, cuyo «Descargar» no entrega nada): se reconoce como fallo (gratis), se reintenta y cada escena acaba con SU vídeo",
+    askWhereToSave: true, dest: "folder",
+    u2: "videoErrorTile=1", u3: "videoErrorTile=1",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 3, u3: 2 }, files: FILES, immediate: true },
+  },
+  busyagent: {
+    desc: "PRUEBA REAL v2.10 (cuenta 2): tras las imágenes el Agent sigue trabajando ~40 s sin botón de generar: se espera a que vuelva (sin re-adjuntar la imagen ni gastar los intentos)",
+    askWhereToSave: true, dest: "folder",
+    u2: "busyAfterImages=40000", u3: "busyAfterImages=40000",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true, logHas: ["El botón de generar no está"] },
+  },
   selfheal: {
     desc: 'Fallo técnico persistente en u2 (el "+" y "Animar" no responden): 2.ª vuelta automática y, si sigue, F5 automático y reanudación sin intervención',
     askWhereToSave: true, dest: "folder", maxRetries: 2, timeoutMin: 9,
@@ -482,7 +494,7 @@ async function main() {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "voicestop2", "music", "musiconly", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "voicestop2", "music", "musiconly", "videoerror", "busyagent", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));

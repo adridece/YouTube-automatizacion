@@ -37,6 +37,14 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 - **[V]** Vídeo: ~45–60 s en una prueba; el Agent avisa "Debido a la alta demanda, la generación se encuentra en cola".
   Puede tardar más.
 
+- **[V-indirecto, prueba real v2.10.0]** Justo al terminar las imágenes el Agent puede seguir "trabajando" unos segundos: el botón
+  de generar (`flow-generate-icon-button`) no está. Hay que esperar a que vuelva.
+- **[V-indirecto, prueba real v2.10.0]** El "+" **no lista las imágenes que ya están adjuntas** en la caja, y "Animar" sobre una imagen
+  ya adjunta no cambia nada.
+- **[V por el usuario, prueba real v2.10.0]** Un vídeo que FALLA en Flow deja un `flow-video-tile` **sin vídeo** (sin fuente) con un
+  aviso de error; su menú tiene «Descargar» pero no entrega nada. [SUPUESTO] el texto exacto del aviso (se buscan "error",
+  "algo ha ido mal", "no se te ha cobrado"…): pedir captura.
+
 ## Menú contextual (clic derecho sobre un tile)
 - **[V-indirecto]** Abrirlo con un `MouseEvent('contextmenu')` sintético funciona (las descargas de la extensión se dispararon).
 - **[V]** Vive en `.cdk-overlay-container`; items `flow-menu-item` (el texto incluye el nombre del icono, p. ej. "downloadDescargar").
