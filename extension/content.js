@@ -64,6 +64,7 @@ const CONFIG = {
   assetListWaitMs: 10000,
   agentReplyIdleMs: 180000, // el Agent contestó y lleva 3 min sin hacer nada → se reintenta
   rateLimitMaxRetries: 4,
+  minGapBetweenVideosMs: 20000, // margen mínimo entre un vídeo terminado/fallido y el siguiente envío
   videoExtraRounds: 5, // vueltas extra al final para los vídeos que fallaron sin cobrar
   download: { createdTimeoutMs: 90000, completeTimeoutMs: 300000, attempts: 3 },
   maxAttemptsPerScene: 6, // por defecto; se cambia en el panel (Opciones avanzadas)
@@ -397,15 +398,25 @@ async function findWithScroll(find, sampleSelector) {
 // ======================================================= AVISO DE COSTE
 // [V] <flow-permission-message> con filas div.option-row[role=radio][aria-label].
 // Los ya contestados llevan .read-only / aria-disabled="true".
+const optionLabel = (r) => (r.getAttribute("aria-label") || r.textContent || "").replace(/\s+/g, " ").trim();
+const unknownDialogsLogged = new WeakSet();
 function findPendingCostDialog() {
   const msgs = $$("flow-permission-message");
   for (let i = msgs.length - 1; i >= 0; i--) {
-    const rows = $$(".option-row:not(.read-only):not([aria-disabled='true'])", msgs[i]);
+    const rows = $$(".option-row:not(.read-only):not([aria-disabled='true']), [role=radio]:not(.read-only):not([aria-disabled='true']), button:not([disabled])", msgs[i])
+      .filter((r, k, all) => !all.some((o) => o !== r && o.contains(r) && classifyCostOption(optionLabel(o)))); // sin duplicados anidados
     if (!rows.length) continue;
-    const byLabel = (l) => rows.find((r) => (r.getAttribute("aria-label") || "").trim().toLowerCase() === l);
-    const approveRow = byLabel(CONFIG.costDialogApproveText);
-    if (!approveRow) continue;
-    return { message: msgs[i], approveRow, rejectRow: byLabel(CONFIG.costDialogRejectText) || null, cost: parseCostFromText(msgs[i].textContent) };
+    const approveRow = rows.find((r) => classifyCostOption(optionLabel(r)) === "approve");
+    if (!approveRow) {
+      // Nunca en silencio: se apunta qué opciones trae el aviso para poder arreglarlo.
+      if (!unknownDialogsLogged.has(msgs[i])) {
+        unknownDialogsLogged.add(msgs[i]);
+        log("error", `Hay un aviso de Flow pendiente pero no reconozco la opción de aprobar. Texto: «${msgs[i].textContent.replace(/\s+/g, " ").trim().slice(0, 160)}» · opciones: ${rows.map((r) => `«${optionLabel(r).slice(0, 40)}»`).join(", ")}. Pásame esta línea.`);
+      }
+      continue;
+    }
+    const rejectRow = rows.find((r) => classifyCostOption(optionLabel(r)) === "reject") || null;
+    return { message: msgs[i], approveRow, rejectRow, cost: parseCostFromText(msgs[i].textContent) };
   }
   return null;
 }
@@ -1066,7 +1077,19 @@ async function processSceneVideo(n, cfg, maxWaitMs, pass) {
     const base = buildPrompt(strongDuration);
     const softenLevel = attempt + (pass - 1) * 2; // cada vuelta, un poco más suave
     const text = softenLevel === 1 ? base : `${base}\n\n${buildSoftenNote("video", softenLevel)}`;
-    if (attempt > 1) log("info", `Reintento ${attempt}/${maxAttempts}: pido al Agent el mismo vídeo con el prompt suavizado.`);
+    if (attempt > 1) {
+      if (!cfg.dryRun) await waitAgentIdle();
+      // (tras la espera, el vídeo del intento anterior pudo aparecer)
+      const late2 = lateVideoForScene(n);
+      if (late2) {
+        videoElByScene.set(n, late2);
+        await setStep(n, "video", "done", { videoKey: tileKey(late2), error: null, failKind: null, doneAt: Date.now() });
+        log("ok", "El vídeo de esta escena SÍ se generó (apareció después): lo uso y NO lo vuelvo a pedir.");
+        outcome = "done";
+        break;
+      }
+      log("info", `Reintento ${attempt}/${maxAttempts}: pido al Agent el mismo vídeo con el prompt suavizado.`);
+    }
     let res;
     let inBox = false; // hay una imagen adjunta en la caja que aún no ha salido
     try {
@@ -1134,6 +1157,7 @@ async function processSceneVideo(n, cfg, maxWaitMs, pass) {
         await saveBatch();
         log("info", `Generando el vídeo… (espero hasta ${Math.round(maxWaitMs / 60000)} min, más si Flow sigue en cola)`);
         const v = await waitForSceneVideo(res, maxWaitMs);
+        markVideoEvent();
         if (v.key) {
           if (v.ambiguous) log("warn", `Aparecieron ${v.count} vídeos nuevos terminados a la vez; asigno a esta escena el más reciente. Revisa que sea el correcto.`);
           videoElByScene.set(n, v.el);
@@ -1251,6 +1275,35 @@ async function settleBeforeSend(cfg, maxWaitMs) {
   if (batch.order.some((m) => batch.scenes[m].video === "review")) await resolveReviewScenes(cfg);
   ctxScene = n;
   ctxPhase = "videos";
+  await waitAgentIdle();
+}
+
+// v2.10.4 (el usuario: "dale tiempo a la IA; que no le envíes el 2.º nada más
+// enviar el 1.º"): antes de CADA envío de vídeo, (1) un margen mínimo desde el
+// último vídeo (terminado o fallido) y (2) el Agent libre: botón de generar
+// presente y habilitado, y su panel sin cambiar durante 10 s (ya no escribe).
+let lastVideoEventAt = 0;
+function markVideoEvent() { lastVideoEventAt = Date.now(); }
+async function waitAgentIdle() {
+  const gap = CONFIG.minGapBetweenVideosMs - (Date.now() - lastVideoEventAt);
+  if (lastVideoEventAt && gap > 0) {
+    log("info", `Dejo ${Math.round(gap / 1000)} s de margen a Flow antes de pedir el siguiente vídeo.`);
+    await sleep(gap);
+  }
+  let lastText = null;
+  let stableSince = Date.now();
+  let noted = false;
+  const t0 = Date.now();
+  const ok = await tryWait(() => {
+    const btn = $(CONFIG.generateButtonSelector);
+    const txt = agentPanelText();
+    if (txt !== lastText) { lastText = txt; stableSince = Date.now(); }
+    const busy = !btn || isDisabledBtn(btn) || $$(CONFIG.pendingTileTag).length > ignoredPending;
+    if (busy) stableSince = Date.now();
+    if (!noted && Date.now() - t0 > 20000) { noted = true; log("info", "El Agent de Flow sigue trabajando; espero a que termine antes de enviarle nada…"); }
+    return !busy && Date.now() - stableSince >= 10000;
+  }, 5 * 60000, "que el Agent de Flow esté libre");
+  if (!ok) log("warn", "El Agent de Flow no ha quedado libre en 5 min; envío igualmente (no se reenvía nada ya enviado).");
 }
 
 // Al final del lote: un vídeo "a revisar" (coste aprobado pero no apareció a
