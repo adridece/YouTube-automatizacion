@@ -63,12 +63,16 @@ function playVoice(id, chars) {
   a.play().catch(() => {});
 }
 let playing = null; // { id, chars } mientras "suena"
+let osc = null;
 document.getElementById("play").addEventListener("click", async () => {
   if (playing) {
+    // firstStopIgnored=1: el primer clic de "parar" no hace efecto (sigue sonando).
+    if (P.get("firstStopIgnored") && !window.__stopIgnored) { window.__stopIgnored = true; return; }
     // Segundo clic = PARAR (no es otra previsualización).
     sessionStorage.setItem("hgPauses", String(+(sessionStorage.getItem("hgPauses") || 0) + 1));
     const v = playing;
     playing = null;
+    try { osc.stop(); } catch (e) {}
     // audioOnPause=1 (como el HeyGen del usuario): la voz sale en la red al parar.
     if (P.get("audioOnPause")) playVoice(v.id, v.chars);
     return;
@@ -85,6 +89,8 @@ document.getElementById("play").addEventListener("click", async () => {
   await new Promise((r) => setTimeout(r, +(P.get("ttsMs") || 1500))); // SIM: HeyGen genera la voz
   uiAnim("disappear_v1.webm");
   playing = { id, chars: text.length };
+  // La previsualización SUENA (WebAudio) hasta que se para.
+  try { const ctx = new AudioContext(); osc = ctx.createOscillator(); const g = ctx.createGain(); g.gain.value = 0.001; osc.connect(g).connect(ctx.destination); osc.start(); } catch (e) {}
   // audioOnReload=1: la voz no sale en la red hasta que se recarga la página;
   // audioOnPause=1: solo sale al pulsar otra vez (parar).
   if (!P.get("audioOnReload") && !P.get("audioOnPause")) playVoice(id, text.length);
