@@ -123,7 +123,7 @@ const SCENARIOS = {
     desc: "PRUEBA REAL v2.10 (cuenta 2): tras las imágenes el Agent sigue trabajando ~40 s sin botón de generar: se espera a que vuelva (sin re-adjuntar la imagen ni gastar los intentos)",
     askWhereToSave: true, dest: "folder",
     u2: "busyAfterImages=40000", u3: "busyAfterImages=40000",
-    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true, logHas: ["El botón de generar no está"] },
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true, logHas: ["El Agent de Flow sigue trabajando"] },
   },
   selfheal: {
     desc: 'Fallo técnico persistente en u2 (el "+" y "Animar" no responden): 2.ª vuelta automática y, si sigue, F5 automático y reanudación sin intervención',
