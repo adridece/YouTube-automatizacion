@@ -398,15 +398,25 @@ async function findWithScroll(find, sampleSelector) {
 // ======================================================= AVISO DE COSTE
 // [V] <flow-permission-message> con filas div.option-row[role=radio][aria-label].
 // Los ya contestados llevan .read-only / aria-disabled="true".
+const optionLabel = (r) => (r.getAttribute("aria-label") || r.textContent || "").replace(/\s+/g, " ").trim();
+const unknownDialogsLogged = new WeakSet();
 function findPendingCostDialog() {
   const msgs = $$("flow-permission-message");
   for (let i = msgs.length - 1; i >= 0; i--) {
-    const rows = $$(".option-row:not(.read-only):not([aria-disabled='true'])", msgs[i]);
+    const rows = $$(".option-row:not(.read-only):not([aria-disabled='true']), [role=radio]:not(.read-only):not([aria-disabled='true']), button:not([disabled])", msgs[i])
+      .filter((r, k, all) => !all.some((o) => o !== r && o.contains(r) && classifyCostOption(optionLabel(o)))); // sin duplicados anidados
     if (!rows.length) continue;
-    const byLabel = (l) => rows.find((r) => (r.getAttribute("aria-label") || "").trim().toLowerCase() === l);
-    const approveRow = byLabel(CONFIG.costDialogApproveText);
-    if (!approveRow) continue;
-    return { message: msgs[i], approveRow, rejectRow: byLabel(CONFIG.costDialogRejectText) || null, cost: parseCostFromText(msgs[i].textContent) };
+    const approveRow = rows.find((r) => classifyCostOption(optionLabel(r)) === "approve");
+    if (!approveRow) {
+      // Nunca en silencio: se apunta qué opciones trae el aviso para poder arreglarlo.
+      if (!unknownDialogsLogged.has(msgs[i])) {
+        unknownDialogsLogged.add(msgs[i]);
+        log("error", `Hay un aviso de Flow pendiente pero no reconozco la opción de aprobar. Texto: «${msgs[i].textContent.replace(/\s+/g, " ").trim().slice(0, 160)}» · opciones: ${rows.map((r) => `«${optionLabel(r).slice(0, 40)}»`).join(", ")}. Pásame esta línea.`);
+      }
+      continue;
+    }
+    const rejectRow = rows.find((r) => classifyCostOption(optionLabel(r)) === "reject") || null;
+    return { message: msgs[i], approveRow, rejectRow, cost: parseCostFromText(msgs[i].textContent) };
   }
   return null;
 }

@@ -189,11 +189,14 @@ function askVideoCostDialog(text, cost, label) {
   {
     const m = document.createElement("flow-permission-message");
     m.className = "msg";
-    m.innerHTML = `¿Quieres que empiece a generar 1 vídeo, que cuesta ${cost} puntos?` +
-      ["Aprobar", "Aprobar siempre", "Rechazar"].map((l) => `<div class="option-row" role="radio" aria-label="${l}">${l}</div>`).join("");
+    // lang=en: Flow en inglés (cuenta del usuario en otro idioma); noAria=1: opciones sin aria-label.
+    const EN = P.get("lang") === "en";
+    const L = EN ? ["Approve", "Always approve", "Reject"] : ["Aprobar", "Aprobar siempre", "Rechazar"];
+    m.innerHTML = (EN ? `Do you want me to start generating 1 video, which costs ${cost} credits?` : `¿Quieres que empiece a generar 1 vídeo, que cuesta ${cost} puntos?`) +
+      L.map((l, k) => `<div class="option-row" role="radio" data-k="${k}"${P.get("noAria") ? "" : ` aria-label="${l}"`}>${l}</div>`).join("");
     m.querySelectorAll(".option-row").forEach((r) => r.addEventListener("click", () => {
       m.querySelectorAll(".option-row").forEach((x) => { x.classList.add("read-only"); x.setAttribute("aria-disabled", "true"); });
-      const l = r.getAttribute("aria-label");
+      const l = ["Aprobar", "Aprobar siempre", "Rechazar"][+r.dataset.k];
       if (l === "Rechazar") return say("He cancelado la generación del vídeo.");
       if (l === "Aprobar siempre") bump("mockApprovedAlways");
       bump("mockApproved");

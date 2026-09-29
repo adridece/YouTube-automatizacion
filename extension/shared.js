@@ -137,8 +137,22 @@ function buildAgentInstruction(imagesMap, sceneNumbers) {
 // vídeo, que cuesta 10 puntos?". Devuelve un entero, o null si no lo encuentra
 // (en ese caso NUNCA se aprueba solo: mejor parar que gastar a ciegas).
 function parseCostFromText(text) {
-  const m = (text || "").match(/(\d+)\s*(?:punt|crédit|credit)/i);
+  const m = (text || "").match(/(\d+)\s*(?:punt|point|crédit|credit|pont)/i);
   return m ? parseInt(m[1], 10) : null;
+}
+
+// ¿Qué opción del aviso de coste es? "approve" (solo esta vez), "always"
+// (aprobar siempre: NUNCA se pulsa), "reject" o null. v2.10.5: la cuenta 2
+// no aprobaba el aviso; se buscaba el texto EXACTO "Aprobar" (si Flow está en
+// otro idioma o la opción se llama un poco distinto, no se encontraba).
+function classifyCostOption(label) {
+  const t = String(label || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  if (/\b(rechazar|reject|deny|denegar|decline|cancelar|cancel|rifiuta|recusar|ablehnen|refuser)\b/.test(t)) return "reject";
+  const approve = /\b(aprobar|approve|allow|permitir|aceptar|accept|approva|aprovar|genehmigen|zulassen|autoriser|approuver)\b/.test(t);
+  if (!approve) return null;
+  if (/\b(siempre|always|sempre|toujours|immer)\b/.test(t)) return "always";
+  return "approve";
 }
 
 // OBSERVADO EN VIVO: el coste de un vídeo lo fija la duración que aparezca en

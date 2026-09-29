@@ -42,7 +42,9 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (29 sep 2026 — v2.10.4, "Cerezium Autopilot")
+## Estado actual (29 sep 2026 — v2.10.5, "Cerezium Autopilot")
+v2.10.5 (BUG_HISTORY #82): el aviso de coste se reconoce en varios idiomas (la cuenta 2 no lo aprobaba); si no se reconoce, el log lo dice.
+
 v2.10.4 (BUG_HISTORY #81): antes de cada envío de vídeo, 20 s de margen y esperar a que el Agent esté libre (el usuario: "dale tiempo a
 la IA"). Pendiente el log de una prueba en que la cuenta 2 no generó ningún vídeo.
 

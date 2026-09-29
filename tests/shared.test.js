@@ -322,3 +322,12 @@ test("buildSoftenNote: intentos avanzados simplifican la acción pero mantienen 
   assert.ok(/simplifica la acción/.test(n6) && /mismo estilo visual/.test(n6) && n6.includes("6 seconds"));
   assert.ok(/misma escena/.test(S.buildSoftenNote("video", 12)));
 });
+
+test("classifyCostOption: reconoce aprobar/rechazar en varios idiomas y nunca confunde «siempre»", () => {
+  for (const t of ["Aprobar", "aprobar", "Approve", "Allow", "Permitir", " Aprobar solo esta vez "]) assert.strictEqual(S.classifyCostOption(t), "approve", t);
+  for (const t of ["Aprobar siempre", "Always approve", "Approve always", "Allow always"]) assert.strictEqual(S.classifyCostOption(t), "always", t);
+  for (const t of ["Rechazar", "Reject", "Deny", "Cancelar"]) assert.strictEqual(S.classifyCostOption(t), "reject", t);
+  for (const t of ["", "Vídeo", "10 puntos"]) assert.strictEqual(S.classifyCostOption(t), null, t);
+  assert.strictEqual(S.parseCostFromText("Do you want me to start generating 1 video, which costs 10 credits?"), 10);
+  assert.strictEqual(S.parseCostFromText("costs 12 points"), 12);
+});
