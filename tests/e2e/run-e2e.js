@@ -126,6 +126,19 @@ const SCENARIOS = {
     u2: "", u3: "",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: [...FILES, "audio.mp3"], logHas: ["Voz guardada"] },
   },
+  voiceonly: {
+    desc: "SOLO VOZ: el kit trae únicamente la narración → no se toca Flow, solo HeyGen → audio.mp3 (antes el panel lo bloqueaba)",
+    askWhereToSave: true, dest: "folder", heygen: true, noFlow: true, kit: "none",
+    narration: "Esto es solo la voz del short, sin imágenes ni animaciones.",
+    u2: "", u3: "",
+    expect: { scenes: {}, approvals: { u2: 0, u3: 0 }, files: ["audio.mp3"], logHas: ["Voz guardada"], mode: "voiceOnly" },
+  },
+  imgonly: {
+    desc: "SOLO IMÁGENES: el kit trae solo los prompts de imagen → se hacen las imágenes sin pedir vídeos (antes el panel lo bloqueaba)",
+    askWhereToSave: true, dest: "folder", kit: "imagesOnly",
+    u2: "", u3: "",
+    expect: { u2: "done", u3: "done", scenes: { 1: "dsd", 2: "dsd", 3: "dsd" }, approvals: { u2: 0, u3: 0 }, files: ["mundofut_001.png", "mundofut_002.png", "mundofut_003.png"], mode: "imagesOnly" },
+  },
   agentreply: {
     desc: "El Agent contesta con una pregunta en vez de generar: a los 3 min sin actividad se apunta su respuesta y se reintenta solo",
     askWhereToSave: true, dest: "folder", timeoutMin: 9,
@@ -208,7 +221,9 @@ async function runScenario(name, sc, server) {
       await panel.reload();
     }
     await panel.bringToFront();
-    await panel.fill("#prompts", (sc.narration ? `## 🎙️ NARRACIÓN\n\`\`\`\n${sc.narration}\n\`\`\`\n\n` : "") + fs.readFileSync(path.join(ROOT, "examples", "sample-kit.txt"), "utf8"));
+    const sample = fs.readFileSync(path.join(ROOT, "examples", "sample-kit.txt"), "utf8");
+    const kitBody = sc.kit === "none" ? "" : sc.kit === "imagesOnly" ? sample.slice(0, sample.indexOf("## 🎬")) : sample;
+    await panel.fill("#prompts", (sc.narration ? `## 🎙️ NARRACIÓN\n\`\`\`\n${sc.narration}\n\`\`\`\n\n` : "") + kitBody);
     await panel.fill("#accA_num", "2");
     await panel.fill("#accA_range", "1-2");
     await panel.selectOption("#accA_res", "1080p");
@@ -258,7 +273,7 @@ async function runScenario(name, sc, server) {
       }
       let voiceDone = true;
       if (sc.heygen) { const lg = (await panel.evaluate(() => chrome.storage.local.get("fbrLog"))).fbrLog || []; voiceDone = lg.some((e) => /Voz guardada|No pude generar\/guardar la voz/.test(e.msg)); }
-      if (b2 && b3 && b2.status !== "running" && b3.status !== "running" && (!sc.reloadU2WhenApproved || reloaded) && voiceDone) break;
+      if ((sc.noFlow || (b2 && b3 && b2.status !== "running" && b3.status !== "running")) && (!sc.reloadU2WhenApproved || reloaded) && voiceDone) break;
       await sleep(1500);
     }
     const { fbrLog } = await panel.evaluate(() => chrome.storage.local.get("fbrLog"));
@@ -276,7 +291,7 @@ async function runScenario(name, sc, server) {
     const b2 = batches.batch_u2, b3 = batches.batch_u3;
     const counts = async (p) => p.evaluate(() => ({ a: +(sessionStorage.getItem("mockApproved") || 0), always: +(sessionStorage.getItem("mockApprovedAlways") || 0), started: +(sessionStorage.getItem("mockStarted") || 0), multi: +(sessionStorage.getItem("mockMultiAttach") || 0), noimg: +(sessionStorage.getItem("mockVideoNoImage") || 0), rejected: (document.getElementById("chat").textContent.match(/He cancelado la generación/g) || []).length, chat: document.getElementById("chat").textContent }));
     const c2 = await counts(u2), c3 = await counts(u3);
-    const folder = b2 && b2.config.batchFolder;
+    const folder = (b2 && b2.config.batchFolder) || ((fbrLog.map((e) => e.msg).join("\n").match(/Carpeta del lote: (\S+)/) || [])[1]);
     let files = {};
     if (sc.dest === "folder") {
       files = await panel.evaluate(async (folder) => {
@@ -301,7 +316,8 @@ async function runScenario(name, sc, server) {
       return { name, results, exploratory: true };
     }
     const E = sc.expect;
-    check("estado final de las cuentas", b2 && b3 && b2.status === E.u2 && b3.status === E.u3, `u2=${b2 && b2.status} u3=${b3 && b3.status}`);
+    if (sc.noFlow) check("solo voz: no se lanzó nada en Flow (0 imágenes, 0 vídeos)", !b2 && !b3 && c2.started + c3.started === 0 && !/Fase 1/.test(logTxt), `u2=${b2 && b2.status} u3=${b3 && b3.status}`);
+    else check("estado final de las cuentas", b2 && b3 && b2.status === E.u2 && b3.status === E.u3, `u2=${b2 && b2.status} u3=${b3 && b3.status}`);
     const code = { d: "done", f: "failed", r: "review", s: "skipped", p: "pending" };
     for (const [n, want] of Object.entries(E.scenes)) {
       const b = +n === 3 ? b3 : b2;
@@ -316,12 +332,13 @@ async function runScenario(name, sc, server) {
     if (E.logHas) for (const t of E.logHas) check(`el log dice "${t}"`, logTxt.includes(t));
     if (E.started) check("vídeos que Flow empezó a generar", c2.started === (E.started.u2 || 0), `u2=${c2.started}`);
     if (E.chatHas) check(`el reenvío remarca la duración ("${E.chatHas.u2}")`, c2.chat.includes(E.chatHas.u2));
-    check("las dos cuentas usan la MISMA carpeta nueva del lote", folder && b3 && b3.config.batchFolder === folder, folder);
+    if (!sc.noFlow) check("las dos cuentas usan la MISMA carpeta nueva del lote", folder && b3 && b3.config.batchFolder === folder, folder);
     const names = Object.keys(files).sort();
     check(`archivos en ${sc.dest === "folder" ? "la carpeta elegida" : "Descargas/MundoFutFlow/<lote>"}: ${E.files.join(", ")}`, JSON.stringify(names) === JSON.stringify([...E.files].sort()), JSON.stringify(files));
     // Cada vídeo simulado pesa 350000 + nº de SU escena (los que ya existían, 350000).
     const vids = names.filter((f) => /_\d{3}\.mp4$/.test(f));
     const sizeOk = (f) => files[f] === (sc.genMode === "downloadTest" ? 350000 : 350000 + parseInt(f.match(/_(\d{3})\./)[1], 10));
+    if (E.mode) check(`el panel eligió solo el modo "${E.mode}"`, logTxt.includes(`modo ${E.mode}`) || (E.mode === "voiceOnly" && /solo la voz/.test(logTxt)));
     if (vids.length) check("cada archivo es el vídeo de SU escena (no cruzados)", vids.every(sizeOk), vids.map((f) => `${f}=${files[f]}`).join(" "));
     if (sc.heygen) {
       const hgState = await hg.evaluate(() => ({ text: document.getElementById("script").innerText.replace(/\s+/g, " ").trim(), played: +(sessionStorage.getItem("hgPlayed") || 0) }));
@@ -377,7 +394,7 @@ async function main() {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));

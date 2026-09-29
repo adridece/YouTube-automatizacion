@@ -42,7 +42,10 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (29 sep 2026 — v2.9.0, "Cerezium Autopilot")
+## Estado actual (29 sep 2026 — v2.9.1, "Cerezium Autopilot")
+v2.9.1: el panel ya no bloquea si el kit no trae todo: hace solo imágenes, solo vídeos o **solo la voz** según lo que haya
+(BUG_HISTORY #69).
+
 **Prueba real v2.8: la descarga de vídeos funciona** (probado con 1 vídeo). v2.9 añade la **voz de HeyGen**: narración del kit →
 pestaña de HeyGen → guion → reproducir → el audio nuevo (red, tipo Media) se guarda como `audio.mp3` en la carpeta del lote
 (`heygen.js` + `runVoice` en background, depurador Network). BUG_HISTORY #68, SIN VERIFICAR en HeyGen real. e2e: `voice`.

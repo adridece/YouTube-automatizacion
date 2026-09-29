@@ -423,6 +423,12 @@ async function launchStep(step) {
 }
 
 async function runPlan(plan) {
+  if (!plan.steps.length) {
+    // Solo la voz (v2.9.1): no hay nada que hacer en Flow.
+    blog("info", `Plan recibido: solo la voz (HeyGen). Carpeta del lote: ${plan.voice ? plan.voice.batchFolder : "?"}`);
+    if (plan.voice && plan.voice.text) runVoice(plan.voice).catch((e) => vlog("error", `Error inesperado generando la voz: ${e.message}`));
+    return;
+  }
   await allowFlowAutomaticDownloads();
   blog("info", `Plan recibido: ${plan.steps.map((s) => `${s.accountKey} → escenas ${s.run.sceneNumbers.join(",")}`).join(" · ")} (${plan.parallel ? "en paralelo" : "una cuenta detrás de otra"}). Carpeta del lote: ${plan.steps[0] ? plan.steps[0].run.batchFolder : "?"}`);
   plan.pending = plan.steps.map((s) => s.accountKey);
