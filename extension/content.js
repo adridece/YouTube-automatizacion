@@ -64,6 +64,7 @@ const CONFIG = {
   assetListWaitMs: 10000,
   agentReplyIdleMs: 180000, // el Agent contestó y lleva 3 min sin hacer nada → se reintenta
   rateLimitMaxRetries: 4,
+  videoExtraRounds: 5, // vueltas extra al final para los vídeos que fallaron sin cobrar
   download: { createdTimeoutMs: 90000, completeTimeoutMs: 300000, attempts: 3 },
   maxAttemptsPerScene: 6, // por defecto; se cambia en el panel (Opciones avanzadas)
 };
@@ -1017,7 +1018,7 @@ async function processSceneVideo(n, cfg, maxWaitMs, pass) {
     ui.setStatus(`Escena ${pad3(n)}: vídeo (intento ${attempt}/${maxAttempts}${pass > 1 ? ", 2.ª vuelta" : ""})`, "info");
     await setStep(n, "video", "running", { videoApproved: false, error: null });
     const base = buildPrompt(strongDuration);
-    const softenLevel = attempt + (pass > 1 ? 2 : 0);
+    const softenLevel = attempt + (pass - 1) * 2; // cada vuelta, un poco más suave
     const text = softenLevel === 1 ? base : `${base}\n\n${buildSoftenNote("video", softenLevel)}`;
     if (attempt > 1) log("info", `Reintento ${attempt}/${maxAttempts}: pido al Agent el mismo vídeo con el prompt suavizado.`);
     let res;
@@ -1125,9 +1126,11 @@ async function processSceneVideo(n, cfg, maxWaitMs, pass) {
     await setStep(n, "video", "review", { error: `${lastError}. No lo repito solo para no gastar puntos dos veces; al final del lote vuelvo a mirar si apareció`, reviewSince: Date.now() });
     log("error", `Vídeo a REVISAR: ${lastError}. No lo repito para no cobrar dos veces; al final vuelvo a comprobar si apareció.`);
   } else if (outcome !== "done") {
-    await setStep(n, "video", "failed", { error: lastError || "no se pudo generar", failKind });
+    // Si Flow dijo que falló (o se rechazó por coste), no se cobró nada aunque se
+    // hubiera pulsado "Aprobar": la escena se puede volver a intentar.
+    await setStep(n, "video", "failed", { error: lastError || "no se pudo generar", failKind, ...(["content", "cost"].includes(failKind) ? { videoApproved: false } : {}) });
     await setStep(n, "download", "skipped");
-    log("error", `No se pudo generar el vídeo de la escena ${pad3(n)}: ${lastError}.${pass === 1 ? " Sigo con la siguiente y lo reintento solo al final (no cuesta puntos)." : ""}`);
+    log("error", `No se pudo generar el vídeo de la escena ${pad3(n)}: ${lastError}.${pass <= CONFIG.videoExtraRounds ? " Sigo con la siguiente y lo reintento solo al final, suavizando más el prompt (no cuesta puntos)." : ""}`);
   } else if (!["dryRun", "imagesOnly"].includes(cfg.genMode)) {
     // DESCARGA INMEDIATA: ahora sabemos seguro cuál es su vídeo.
     await downloadScene(n, "video", cfg);
@@ -1143,20 +1146,25 @@ async function phaseVideos(cfg) {
   const maxWaitMs = Math.max(cfg.maxWaitMs || 0, 10 * 60000);
   for (const n of batch.order) await processSceneVideo(n, cfg, maxWaitMs, 1);
 
-  // SEGUNDA VUELTA automática: las escenas que fallaron sin cobrar (bloqueo,
-  // coste > 10 rechazado, no se pudo adjuntar/enviar) se intentan otra vez,
-  // con el prompt más suavizado y la duración remarcada.
+  // VUELTAS automáticas (v2.10.2, el usuario: "que se generen siempre, como
+  // las imágenes"): las escenas que fallaron sin cobrar (Flow no pudo, bloqueo,
+  // no se pudo adjuntar/enviar) se vuelven a intentar hasta CONFIG.videoExtraRounds
+  // vueltas, cada una suavizando un poco más el prompt pero con la misma escena,
+  // estilo y duración. Un coste > 10 solo se reintenta en la 2.ª vuelta (si
+  // sigue pidiendo más, el problema es el modelo de vídeo, no el prompt).
   if (!cfg.dryRun) {
-    const again = batch.order.filter((n) => sceneRetryable(n, cfg));
-    if (again.length) {
+    for (let pass = 2; pass <= CONFIG.videoExtraRounds + 1; pass++) {
+      const again = batch.order.filter((n) => sceneRetryable(n, cfg) && (pass === 2 || batch.scenes[n].failKind !== "cost"));
+      if (!again.length) break;
       ctxScene = null;
-      log("warn", `Segunda vuelta automática para las escenas que fallaron (no costaron puntos): ${again.map(pad3).join(", ")}. Empiezo en 30 s.`);
-      await sleep(30000);
+      const waitS = pass === 2 ? 30 : 60;
+      log("warn", `${pass === 2 ? "Segunda vuelta automática" : `Vuelta automática ${pass}/${CONFIG.videoExtraRounds + 1}`} para las escenas que fallaron (no costaron puntos): ${again.map(pad3).join(", ")}. Suavizo un poco más el prompt (misma escena y estilo). Empiezo en ${waitS} s.`);
+      await sleep(waitS * 1000);
       for (const n of again) {
         throwIfStopped();
         await setStep(n, "video", "pending", { error: null });
         await setStep(n, "download", "pending");
-        await processSceneVideo(n, cfg, maxWaitMs, 2);
+        await processSceneVideo(n, cfg, maxWaitMs, pass);
       }
     }
     // Si aún quedan fallos TÉCNICOS (no se pudo adjuntar/enviar), se recarga

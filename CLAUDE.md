@@ -42,7 +42,10 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (29 sep 2026 — v2.10.1, "Cerezium Autopilot")
+## Estado actual (29 sep 2026 — v2.10.2, "Cerezium Autopilot")
+v2.10.2 (BUG_HISTORY #79): los vídeos que Flow falla se reintentan **siempre** (hasta 5 vueltas extra, suavizando cada vez más con el
+mismo estilo); antes un fallo tras "Aprobar" no entraba en la 2.ª vuelta. e2e: `alwaysretry`.
+
 **Prueba real v2.10.0: la música de Mureka funciona** (y la voz de HeyGen funcionó a las 10:08). v2.10.1 (BUG_HISTORY #78): un vídeo
 que Flow falla deja un tile SIN vídeo → se reconoce como fallo y se reintenta (antes se daba por bueno y la descarga se colgaba);
 si falta el botón de generar tras las imágenes se espera y no se re-adjunta la imagen. e2e: `videoerror`, `busyagent`.

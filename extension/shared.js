@@ -472,7 +472,14 @@ function buildSoftenNote(kind, attempt) {
   if (attempt === 2) {
     return `(El intento anterior falló o fue bloqueado por las políticas de contenido. Reformula ${what} de forma un poco más suave y segura, sin cambiar la idea. ${keep})`;
   }
-  return `(Intento ${attempt}: ha vuelto a bloquearse. Suaviza más ${what}: sustituye cualquier elemento que pueda considerarse violento, sexual, peligroso, de marca/logotipo o de una persona real identificable por equivalentes neutros o genéricos. ${keep})`;
+  if (attempt <= 4) {
+    return `(Intento ${attempt}: ha vuelto a fallar. Suaviza más ${what}: sustituye cualquier elemento que pueda considerarse violento, sexual, peligroso, de marca/logotipo o de una persona real identificable por equivalentes neutros o genéricos. ${keep})`;
+  }
+  // Intentos avanzados: además, simplificar lo que pasa (sin cambiar el estilo).
+  const simplify = kind === "video"
+    ? "Si hace falta, simplifica la acción: movimientos más suaves y lentos, sin contacto físico brusco ni caídas, y menos elementos a la vez"
+    : "Si hace falta, simplifica la composición: menos elementos y detalles más neutros";
+  return `(Intento ${attempt}: sigue fallando. Reescribe ${what} con palabras más neutras y seguras. ${simplify}, pero conserva los mismos personajes, el mismo estilo visual, los mismos colores y el mismo encuadre. ${keep})`;
 }
 
 // ¿El nombre de un tile de imagen corresponde a la escena `label` ("006")?

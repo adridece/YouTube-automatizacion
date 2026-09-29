@@ -315,3 +315,9 @@ test("tileLooksFailed: reconoce tarjetas de error de Flow y no los vídeos norma
   for (const t of ["Error No se ha podido generar esta imagen. No se te ha cobrado", "Algo ha ido mal", "Something went wrong", "errorError al generar", "Se ha producido un error"]) assert.ok(S.tileLooksFailed(t), t);
   for (const t of ["mundofut_001", "Animate a1b2", "007", "play_arrow 0:06 Terror en el estadio", ""]) assert.ok(!S.tileLooksFailed(t), t);
 });
+
+test("buildSoftenNote: intentos avanzados simplifican la acción pero mantienen estilo y 6 s", () => {
+  const n6 = S.buildSoftenNote("video", 6);
+  assert.ok(/simplifica la acción/.test(n6) && /mismo estilo visual/.test(n6) && n6.includes("6 seconds"));
+  assert.ok(/misma escena/.test(S.buildSoftenNote("video", 12)));
+});
