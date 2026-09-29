@@ -293,10 +293,11 @@ function pickNewVideoKey(newKeys, assignedKeys) {
 
 // [V] = visto en vivo · [SUPUESTO] = redacción no confirmada todavía.
 const FLOW_SIGNALS = {
-  rateLimit: /preguntando demasiado r[aá]pido/gi, // [V]
-  policy: /bloquead[ao]s? por nuestras pol[ií]ticas|pol[ií]ticas de seguridad/gi, // [V]
-  genError: /no se ha podido generar/gi, // [V] tarjeta de error ("No se te ha cobrado")
-  cancelled: /he cancelado la generaci[oó]n/gi, // [V] tras "Rechazar"
+  // v2.10.6: también en inglés (la cuenta 2 del usuario podría tener Flow en otro idioma) [SUPUESTO la redacción inglesa]
+  rateLimit: /preguntando demasiado r[aá]pido|asking too (fast|quickly)|too many requests/gi, // [V] el español
+  policy: /bloquead[ao]s? por nuestras pol[ií]ticas|pol[ií]ticas de (seguridad|contenido|uso)|infring\w*|viola\w* (nuestras |las )?pol[ií]ticas|violat\w* (our |the )?(content |safety |usage )?polic\w*|against our (content |safety |usage )?polic\w*|blocked by our|(safety|content|usage) polic(y|ies)/gi, // [V] el primero
+  genError: /no se ha podido generar|couldn.?t (be )?generat\w*|could not (be )?generat\w*|failed to generate|unable to generate/gi, // [V] el primero ("No se te ha cobrado")
+  cancelled: /he cancelado la generaci[oó]n|cancell?ed the (video )?generation/gi, // [V] el primero
   noPoints: /(no tienes (suficientes )?(puntos|cr[eé]ditos))|(puntos|cr[eé]ditos) insuficientes|sin (puntos|cr[eé]ditos)|has (alcanzado|agotado)[^.]{0,40}(l[ií]mite|puntos|cr[eé]ditos)|l[ií]mite diario/gi, // [SUPUESTO]
 };
 
@@ -470,7 +471,8 @@ function buildVideoTileName(prefix, num, batchFolder) {
 function tileLooksFailed(text) {
   // (v2.10.3: SIN la palabra suelta "error": un tile de vídeo bueno podría llevarla
   // como icono oculto y se daría por fallido un vídeo que sí salió → se pagaría otra vez.)
-  return /no se ha podido generar|no se te ha cobrado|algo (ha )?(ido|salido) mal|se ha producido un error|couldn.?t generate|something went wrong|generation failed/i.test(String(text || ""));
+  // v2.10.6: también el aviso de POLÍTICAS (prueba real, cuenta 2: se tomaba por vídeo generado y no se reintentaba).
+  return /no se ha podido generar|no se te ha cobrado|algo (ha )?(ido|salido) mal|se ha producido un error|couldn.?t (be )?generat|could not (be )?generat|something went wrong|generation failed|failed to generate|unable to generate|you (were|have) not been charged|pol[ií]tica|polic(y|ies)|infring|bloquead[ao]|blocked/i.test(String(text || ""));
 }
 function tileLooksInProgress(text) {
   return /\b\d{1,3}\s?%|generando|en cola|procesando|preparando/i.test(String(text || ""));

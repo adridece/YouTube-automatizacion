@@ -959,9 +959,14 @@ async function waitForSceneVideo(sendRes, maxWaitMs) {
     }
     const c = videoCounts();
     // ¿Hay un vídeo bueno MÁS que antes de enviar? → salió (aunque también haya avisos).
-    if (c.good > base.good) {
+    // v2.10.6: si el Agent dice que se bloqueó / falló y el "vídeo nuevo" no
+    // tiene vídeo reproducible, NO es un vídeo: es el aviso (se trata como fallo).
+    const agentSaysFail = sig.policy || sig.genError;
+    const readyNew = fresh.filter((t) => tileReady(t) && !isErrorTile(t));
+    const trustNew = !agentSaysFail || readyNew.some((t) => videoSrcOf(t));
+    if (c.good > base.good && trustNew) {
       failSince = 0;
-      const ready = fresh.filter((t) => tileReady(t) && !isErrorTile(t));
+      const ready = agentSaysFail ? readyNew.filter((t) => videoSrcOf(t)) : readyNew;
       if (!ready.length) { readyKey = null; return null; }
       const pick = pickNewVideoKey(ready.map(tileKey), []);
       const el = ready.find((t) => tileKey(t) === pick.key);

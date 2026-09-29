@@ -331,3 +331,10 @@ test("classifyCostOption: reconoce aprobar/rechazar en varios idiomas y nunca co
   assert.strictEqual(S.parseCostFromText("Do you want me to start generating 1 video, which costs 10 credits?"), 10);
   assert.strictEqual(S.parseCostFromText("costs 12 points"), 12);
 });
+
+test("v2.10.6: avisos de políticas / fallo (también en inglés) cuentan como fallo, no como vídeo", () => {
+  for (const t of ["Esta generación infringe nuestras políticas", "This video violates our content policy", "Blocked by our safety policies", "We couldn't generate this video"]) assert.ok(S.tileLooksFailed(t), t);
+  assert.ok(S.detectNewSignals("", "This generation violates our content policy.").policy >= 1);
+  assert.ok(S.detectNewSignals("", "We couldn't generate this video.").genError >= 1);
+  assert.ok(!S.tileLooksFailed("mundofut_006"));
+});
