@@ -131,6 +131,20 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 ## Entorno de herramientas
 - Claude in Chrome no puede navegar a `chrome://extensions` (permiso denegado) y no puede escribir contraseñas por el usuario.
 
+## Mureka (música, v2.10) — lo que dio el usuario el 29 sep 2026 [SIN VERIFICAR por la extensión]
+- Página: `https://www.mureka.ai/create`. Hay que tener la sesión iniciada.
+- Prompt: `#app > … > div.co-produce-mode__composer > div > form > textarea` → la extensión usa `.co-produce-mode__composer form textarea`
+  (escribe con el setter nativo + evento `input`; si no lo coge, teclado real del depurador).
+- Generar: `… div.composer__primary-actions > button > span.composer__submit-icon` → `.co-produce-mode__composer .composer__primary-actions button`.
+- Library (menú izquierdo): `… div.main-nav … div.nav-wraper-main > div:nth-child(6) > div` → `.main-nav .nav-wraper-main > div:nth-child(6) > div`
+  (reserva: elemento del menú con el texto «Library»/«Biblioteca»).
+- Última canción: `… div.pull-to-load-main-list > div:nth-child(1)`; su play: `… > div.audio-item-info-play-box > div > div > div > i`
+  → `.pull-to-load-main-list > div:nth-child(1) .audio-item-info-play-box i`.
+- Al darle al play en Library aparece en Network → Media un archivo que **empieza por «music…»**: es el que se guarda (musica.mp3).
+- [SUPUESTO] Mientras se genera, la canción sale arriba en Library con un texto tipo «Generating NN%» y sin play: la extensión espera a que
+  la primera canción sea distinta de la de antes, tenga play y no muestre «generat…/creating/queue/NN%». Si Mureka lo muestra de otra
+  forma, el log dirá «Sigo esperando la canción nueva…» y al final qué vio: pedir captura de Library.
+
 ## HeyGen (voz, v2.9) — lo que dio el usuario el 29 sep 2026 [SIN VERIFICAR por la extensión]
 - Proyecto: `https://app.heygen.com/create-v4/<id>?vt=l&panel=scene&subPanel=voice`.
 - Guion (puede traer texto previo: hay que borrarlo): `… div.css-ltmzi1.te-scriptpanel-redesign.tw-relative > div:nth-child(2) > div > div`.

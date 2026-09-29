@@ -126,7 +126,7 @@ chrome.action.onClicked.addListener(async (tab) => {
   // Se llama a open() sin esperar a nada antes: Chrome exige que sea
   // inmediato tras el clic.
   const opening = sidePanelSupported() ? chrome.sidePanel.open({ windowId: tab.windowId }) : Promise.reject(new Error("este navegador no tiene panel lateral para extensiones"));
-  if (/^https:\/\/(flow\.google\.com|labs\.google|app\.heygen\.com)\//.test(tab.url || "")) {
+  if (/^https:\/\/(flow\.google\.com|labs\.google|app\.heygen\.com|www\.mureka\.ai)\//.test(tab.url || "")) {
     armTab(tab.id).then((r) => {
       if (!r.ok) blog("warn", `No pude preparar la pestaña de ${r.acc || "Flow"} para segundo plano: ${r.error}`, { acc: r.acc || null, phase: "setup" });
       chrome.runtime.sendMessage({ type: "ARMED_EVENT", ok: r.ok, already: !!r.already, acc: r.acc, error: r.error || null }).catch(() => {});
@@ -269,8 +269,9 @@ async function isArmed(tabId) {
 async function armTab(tabId, quiet) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   const isHeygen = !!(tab && /^https:\/\/app\.heygen\.com\//.test(tab.url || ""));
-  if (!tab || (!isHeygen && !/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || ""))) return { ok: false, error: "no es una pestaña de Flow ni de HeyGen" };
-  const acc = isHeygen ? "heygen" : getFlowAccountKey(tab.url);
+  const isMureka = !!(tab && /^https:\/\/www\.mureka\.ai\//.test(tab.url || ""));
+  if (!tab || (!isHeygen && !isMureka && !/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || ""))) return { ok: false, error: "no es una pestaña de Flow, HeyGen ni Mureka" };
+  const acc = isHeygen ? "heygen" : isMureka ? "mureka" : getFlowAccountKey(tab.url);
   if (await isArmed(tabId)) return { ok: true, acc, already: true };
   if (!chrome.tabCapture || !chrome.tabCapture.getMediaStreamId) return { ok: false, acc, error: "este navegador no permite a las extensiones capturar pestañas" };
   let streamId;
@@ -299,7 +300,7 @@ const dbgTabs = new Set();
 async function dbgEnsure(tabId) {
   if (!chrome.debugger) throw new Error("este navegador no permite chrome.debugger");
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google|app\.heygen\.com)\//.test(tab.url || "")) throw new Error("solo se usa en pestañas de Flow y de HeyGen");
+  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google|app\.heygen\.com|www\.mureka\.ai)\//.test(tab.url || "")) throw new Error("solo se usa en pestañas de Flow, HeyGen y Mureka");
   if (!dbgTabs.has(tabId)) {
     try {
       await chrome.debugger.attach({ tabId }, "1.3");
@@ -425,9 +426,12 @@ async function launchStep(step) {
 
 async function runPlan(plan) {
   if (!plan.steps.length) {
-    // Solo la voz (v2.9.1): no hay nada que hacer en Flow.
-    blog("info", `Plan recibido: solo la voz (HeyGen). Carpeta del lote: ${plan.voice ? plan.voice.batchFolder : "?"}`);
+    // Solo audio (v2.9.1 / v2.10): no hay nada que hacer en Flow.
+    const what = [plan.voice && "la voz (HeyGen)", plan.music && "la música (Mureka)"].filter(Boolean).join(" y ");
+    const folder = (plan.voice && plan.voice.batchFolder) || (plan.music && plan.music.batchFolder) || "?";
+    blog("info", `Plan recibido: solo ${what || "nada"}. Carpeta del lote: ${folder}`);
     if (plan.voice && plan.voice.text) runVoice(plan.voice).catch((e) => vlog("error", `Error inesperado generando la voz: ${e.message}`));
+    if (plan.music && plan.music.prompt) runMusic(plan.music).catch((e) => mlog("error", `Error inesperado generando la música: ${e.message}`));
     return;
   }
   await allowFlowAutomaticDownloads();
@@ -437,6 +441,7 @@ async function runPlan(plan) {
   await setPlan(plan);
   // La voz (HeyGen) va a la vez que Flow, en su propia pestaña.
   if (plan.voice && plan.voice.text) runVoice(plan.voice).catch((e) => vlog("error", `Error inesperado generando la voz: ${e.message}`));
+  if (plan.music && plan.music.prompt) runMusic(plan.music).catch((e) => mlog("error", `Error inesperado generando la música: ${e.message}`));
   if (plan.parallel) {
     for (const s of plan.steps) {
       const ok = await launchStep(s);
@@ -736,7 +741,7 @@ if (chrome.debugger) {
         const mime = (hdr(params.responseHeaders, "content-type") || "").split(";")[0];
         const rec = { url, type: params.resourceType, mime, status: params.responseStatusCode || 0, t: Date.now(), finished: true, contentRange: hdr(params.responseHeaders, "content-range"), via: "interceptado" };
         try {
-          if (voiceMediaScore(rec) > 0) {
+          if (voiceMediaScore(rec) > 0 || musicMediaScore(rec) > 0) {
             const body = await chrome.debugger.sendCommand({ tabId }, "Fetch.getResponseBody", { requestId: params.requestId });
             rec.body = body.base64Encoded ? body.body : btoa(unescape(encodeURIComponent(body.body)));
           }
@@ -980,6 +985,221 @@ async function runVoiceInner(v) {
       }
     }
     return { ok: false, error: `el audio se generó pero no pude guardarlo: ${lastErr}` };
+  } finally {
+    await cleanup();
+  }
+}
+
+
+// ============================================================ MÚSICA (Mureka, v2.10)
+// Receta del usuario (29 sep 2026) en www.mureka.ai/create: prompt → generar
+// (UNA vez: gasta créditos) → esperar → Library → play de la ÚLTIMA canción →
+// en Network → Media aparece "music…" → se guarda como musica.mp3 en la
+// carpeta del lote. La red se escucha con el depurador, como la voz.
+function mlog(level, msg) { blog(level, msg, { phase: "music" }); }
+const MUSIC_KEY = "fbrMusic";
+async function setMusicState(patch) {
+  const cur = (await chrome.storage.local.get(MUSIC_KEY))[MUSIC_KEY] || {};
+  await chrome.storage.local.set({ [MUSIC_KEY]: { ...cur, ...patch, t: Date.now() } });
+}
+const MUREKA_CREATE = "https://www.mureka.ai/create";
+async function findMurekaTab() {
+  const tabs = await chrome.tabs.query({ url: "https://www.mureka.ai/*" });
+  return tabs.find((t) => /\/create/.test(t.url || "")) || tabs[0] || null;
+}
+async function sendToMureka(tabId, msg) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, msg);
+  } catch (e) {
+    if (!/Receiving end does not exist|Could not establish connection/i.test(String(e && e.message))) throw e;
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["mureka.js"] });
+    await new Promise((r) => setTimeout(r, 500));
+    return await chrome.tabs.sendMessage(tabId, msg);
+  }
+}
+async function waitTabLoaded(tabId, extraMs) {
+  await new Promise((r) => setTimeout(r, 800));
+  for (let i = 0; i < 60; i++) {
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (t && t.status === "complete" && !t.discarded) break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  await new Promise((r) => setTimeout(r, extraMs || 2500));
+}
+
+let musicRunning = false;
+async function runMusic(m) {
+  if (musicRunning) { mlog("warn", "Ya se está generando una música: no lanzo otra (cada generación gasta créditos)."); return; }
+  musicRunning = true;
+  try {
+    await setMusicState({ status: "running", msg: "Preparando Mureka…", file: null, batchFolder: m.batchFolder, startedAt: Date.now() });
+    const r = await runMusicInner(m);
+    if (r.ok) {
+      mlog("ok", `Música guardada: ${r.file}`);
+      await setMusicState({ status: "done", msg: "Música guardada", file: r.file });
+      notify("Música terminada ✅", `guardada: ${r.file}`, false);
+    } else {
+      mlog("error", `Música: ${r.error}`);
+      await setMusicState({ status: "error", msg: r.error });
+      notify("Música: no se pudo guardar", String(r.error || "").slice(0, 200), true);
+    }
+  } finally {
+    musicRunning = false;
+  }
+}
+
+async function runMusicInner(m) {
+  const tab = await findMurekaTab();
+  if (!tab) return { ok: false, error: "no hay ninguna pestaña de Mureka abierta. Abre www.mureka.ai/create (con tu sesión iniciada) y vuelve a lanzar." };
+  const tabId = tab.id;
+  if (tab.discarded) { await chrome.tabs.reload(tabId).catch(() => {}); await waitTabLoaded(tabId, 3000); }
+  chrome.tabs.update(tabId, { autoDiscardable: false }).catch(() => {});
+  mlog("info", `Música: uso la pestaña de Mureka (${(tab.url || "").split("?")[0]}). Prompt: «${m.prompt.slice(0, 80)}${m.prompt.length > 80 ? "…" : ""}».`);
+  // Segundo plano, igual que Flow y HeyGen.
+  let armed = await isArmed(tabId);
+  if (!armed) armed = (await armTab(tabId, true)).ok;
+  if (!armed) mlog("warn", "La pestaña de Mureka NO está preparada para segundo plano: entra en ella y pulsa la cereza (o Alt+Shift+C) una vez, como en Flow.");
+  else mlog("info", "Pestaña de Mureka preparada para segundo plano ✓.");
+  await dbgEnsure(tabId).catch(() => {});
+  const awake = (on) => sendToMureka(tabId, { type: "MU_AWAKE", on }).catch(() => {});
+  const gotoCreate = async () => {
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (t && /\/create/.test(t.url || "")) return;
+    await chrome.tabs.update(tabId, { url: MUREKA_CREATE });
+    await waitTabLoaded(tabId, 3000);
+  };
+
+  // Red de la pestaña (como DevTools → Network → Media) + copia de cada media.
+  let list = new Map();
+  const listen = async () => {
+    await dbgEnsure(tabId);
+    netMedia.set(tabId, list);
+    await chrome.debugger.sendCommand({ tabId }, "Network.enable", {});
+    await chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: true }).catch(() => {});
+    await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", { patterns: [{ resourceType: "Media", requestStage: "Response" }] }).catch(() => {});
+  };
+  const cleanup = async () => {
+    await awake(false);
+    if (netMedia.get(tabId) === list) {
+      await chrome.debugger.sendCommand({ tabId }, "Fetch.disable", {}).catch(() => {});
+      netMedia.delete(tabId);
+      await chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: false }).catch(() => {});
+    }
+    const running = await getRunningTabs();
+    if (!running[tabId]) await dbgDetach(tabId);
+  };
+  const seen = (since) => [...list.values()].filter((x) => x.t >= since - 500 && x.url);
+  const describe = (arr) => arr.map((x) => `${x.url.split("?")[0].split("/").pop() || x.url.slice(0, 40)} (${x.status || "?"}${x.mime ? ", " + x.mime : ""})`).join(" · ");
+
+  try {
+    await awake(true);
+    // 0) ¿Cuál es HOY la última canción de la biblioteca? (para reconocer la nueva)
+    await setMusicState({ msg: "Mirando la biblioteca de Mureka…" });
+    await gotoCreate();
+    const lib0 = await sendToMureka(tabId, { type: "MU_LIBRARY" }).catch((e) => ({ ok: false, error: e.message }));
+    const sig0 = lib0 && lib0.ok && lib0.exists ? lib0.sig : "";
+    mlog("info", lib0 && lib0.ok ? `Biblioteca: ${sig0 ? "la última canción ahora es «" + sig0.slice(0, 60) + "…»" : "vacía"}.` : `No pude mirar la biblioteca antes de generar (${(lib0 && lib0.error) || "sin respuesta"}); sigo.`);
+    await gotoCreate();
+    await awake(true);
+
+    // 1) Escribir el prompt (se puede repetir: no gasta).
+    await setMusicState({ msg: "Escribiendo el prompt de música…" });
+    let w = null;
+    for (let i = 1; i <= 3 && !(w && w.ok); i++) {
+      w = await sendToMureka(tabId, { type: "MU_WRITE", text: m.prompt }).catch((e) => ({ ok: false, error: e.message }));
+      if (!(w && w.ok)) { mlog("warn", `Música: escribir el prompt, intento ${i}/3: ${(w && w.error) || "sin respuesta"}`); await new Promise((r) => setTimeout(r, 3000)); }
+    }
+    if (!(w && w.ok)) return { ok: false, error: `no pude escribir el prompt en Mureka (${(w && w.error) || "sin respuesta"}). NO he pulsado generar: no se ha gastado nada.` };
+
+    // 2) Generar UNA sola vez.
+    const g = await sendToMureka(tabId, { type: "MU_GENERATE", text: m.prompt }).catch((e) => ({ ok: false, error: e.message }));
+    if (!(g && g.ok)) return { ok: false, error: `${(g && g.error) || "Mureka no respondió"}. No se ha generado nada.` };
+    const genAt = Date.now();
+    mlog("info", `Botón de generar pulsado UNA vez (${g.real ? "clic real" : "clic normal"}). Espero a que la canción esté lista en Library (sin volver a generar)…`);
+    await setMusicState({ msg: "Generando la música en Mureka…" });
+
+    // 3) Esperar a que la canción NUEVA esté lista en Library.
+    await new Promise((r) => setTimeout(r, 30000));
+    let ready = null;
+    let lastInfo = null;
+    let stableSig = null;
+    for (let i = 0; i < 60 && !ready; i++) { // hasta ~15 min
+      if (i > 0 && i % 6 === 0) { await chrome.tabs.reload(tabId).catch(() => {}); await waitTabLoaded(tabId, 3000); await awake(true); } // la lista puede no refrescarse sola
+      const info = await sendToMureka(tabId, { type: "MU_LIBRARY" }).catch((e) => ({ ok: false, error: e.message }));
+      lastInfo = info;
+      const isNew = info && info.ok && info.exists && info.sig !== sig0;
+      if (isNew && info.hasPlay && !info.busy) {
+        if (stableSig === info.sig) ready = info; // igual dos veces seguidas
+        stableSig = info.sig;
+      } else stableSig = null;
+      if (i > 0 && i % 4 === 0) mlog("info", `Sigo esperando la canción nueva (${Math.round((Date.now() - genAt) / 60000)} min)${info && info.busy ? ": Mureka la está generando" : ""}…`);
+      if (!ready) await new Promise((r) => setTimeout(r, 15000));
+    }
+    if (!ready) return { ok: false, error: `en 15 min no apareció la canción nueva en Library (última vista: «${((lastInfo && lastInfo.sig) || "nada").slice(0, 60)}»). No vuelvo a generar para no gastar créditos. Pásame el log y una captura de Library.` };
+    mlog("ok", `Canción nueva lista en Library: «${ready.sig.slice(0, 60)}…».`);
+
+    // 4) Play de la última canción con la red escuchando → aparece "music…".
+    await setMusicState({ msg: "Reproduciendo la canción para recogerla…" });
+    await listen();
+    let found = null;
+    for (let attempt = 1; attempt <= 3 && !found; attempt++) {
+      const since = Date.now();
+      const p = await sendToMureka(tabId, { type: "MU_PLAY_FIRST" }).catch((e) => ({ ok: false, error: e.message }));
+      if (!(p && p.ok)) { mlog("warn", `Música: play en Library, intento ${attempt}/3: ${(p && p.error) || "sin respuesta"}`); await new Promise((r) => setTimeout(r, 4000)); continue; }
+      if (p.sig && p.sig !== ready.sig) mlog("warn", "Ojo: la primera canción de Library ha cambiado; sigo con la que hay ahora.");
+      mlog("info", `Play pulsado en la última canción (${p.real ? "clic real" : "clic normal"}); espero el archivo «music…» en la red…`);
+      for (let i = 0; i < 40 && !found; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const best = pickMusicMedia(seen(since));
+        if (best) {
+          for (let k = 0; k < 10 && !seen(since).some((x) => x.body && x.url === best.url); k++) await new Promise((r) => setTimeout(r, 500));
+          found = pickMusicMedia(seen(since).filter((x) => x.url === best.url && x.body)) || best;
+        }
+      }
+      if (!found) mlog("warn", `Tras el play no apareció «music…» en la red (vi: ${describe(seen(since)) || "nada"}).${attempt < 3 ? " Pruebo otra vez (el play no gasta créditos)." : ""}`);
+    }
+    if (!found) return { ok: false, error: "la canción está en Library pero al darle al play no apareció el archivo «music…» en la red. Pásame el log." };
+    mlog("info", `Música detectada: ${found.url.slice(0, 100)}${found.url.length > 100 ? "…" : ""} · ${found.status || "?"}${found.mime ? " · " + found.mime : ""}`);
+    await setMusicState({ msg: "Guardando la música…" });
+
+    // 5) Leer los bytes completos y guardar.
+    let got = null;
+    const tries = [];
+    if (found.body && contentRangeIsFull(found.contentRange, null) && found.body.length > 1400) got = { b64: found.body, mime: found.mime, how: "copia interceptada" };
+    else if (found.body) tries.push(`copia interceptada parcial (${found.contentRange})`);
+    if (!got) {
+      try {
+        const expr = `(async () => { const r = await fetch(${JSON.stringify(found.url)}, { credentials: "include" }); const b = await r.blob(); const d = await new Promise((ok) => { const f = new FileReader(); f.onload = () => ok(String(f.result).split(",")[1] || ""); f.readAsDataURL(b); }); return JSON.stringify({ s: r.status, t: b.type, n: b.size, d }); })()`;
+        const ev = await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true });
+        const o = JSON.parse((ev && ev.result && ev.result.value) || "{}");
+        if (o.d && o.n > 1000 && o.s < 300) got = { b64: o.d, mime: o.t || found.mime, how: "descargada desde la página" };
+        else tries.push(`página: HTTP ${o.s}, ${o.n} bytes`);
+      } catch (e) { tries.push(`página: ${e.message}`); }
+    }
+    if (!got) {
+      const f = await sendToMureka(tabId, { type: "MU_FETCH", url: found.url }).catch((e) => ({ ok: false, error: e.message }));
+      if (f && f.ok && f.size > 1000) got = { b64: f.data, mime: f.mime || found.mime, how: "descargada (extensión en la página)" };
+      else tries.push(`extensión en la página: ${(f && f.error) || "sin datos"}`);
+    }
+    const ext = audioExtFromMime(got ? got.mime : found.mime, found.url);
+    const relPath = `${m.batchFolder}/musica.${ext}`;
+    // Parar la canción (si sigue sonando) para no dejarla puesta.
+    const pl = await sendToMureka(tabId, { type: "MU_PLAYING" }).catch(() => null);
+    if (pl && pl.playing > 0) await sendToMureka(tabId, { type: "MU_PLAY_FIRST" }).catch(() => {});
+    if (got) {
+      mlog("info", `Música leída (${got.how}, ${Math.round((got.b64.length * 3) / 4 / 1024)} KB).`);
+      return { ok: true, file: await saveVoiceBytes(got.b64, got.mime || "audio/mpeg", relPath, m.destMode) };
+    }
+    if (/^https:/.test(found.url)) {
+      if (m.destMode === "folder") {
+        const res = await offscreenCall({ type: "FS_SAVE_URL", url: found.url, relPath });
+        if (!res || !res.ok) return { ok: false, error: `no pude leer la música (${[...tries, `por URL: ${(res && res.error) || "sin respuesta"}`].join("; ")})` };
+        return { ok: true, file: res.path || relPath };
+      }
+      await ownDownload(found.url, relPath);
+      return { ok: true, file: `Descargas/MundoFutFlow/${relPath}` };
+    }
+    return { ok: false, error: `no pude leer la música (${tries.join("; ")})` };
   } finally {
     await cleanup();
   }

@@ -42,7 +42,7 @@ function trimTrailingJunk(text) {
  * vacío y todo se coloca en `images`.
  */
 function splitCombinedPrompts(raw) {
-  raw = extractNarration(raw).rest; // la narración (voz) no son prompts
+  raw = extractMusic(extractNarration(raw).rest).rest; // la narración (voz) y la música no son prompts de imagen/vídeo
   const markerRe = /\[(\d{1,3})\]/g;
   const markers = [];
   let m;
@@ -405,7 +405,7 @@ function prepareResume(state) {
 
 // --- Log ----------------------------------------------------------------
 
-const PHASE_LABELS = { images: "Imágenes", videos: "Vídeo", downloads: "Descarga", setup: "Inicio", plan: "Plan", run: "Lote", voice: "Voz" };
+const PHASE_LABELS = { images: "Imágenes", videos: "Vídeo", downloads: "Descarga", setup: "Inicio", plan: "Plan", run: "Lote", voice: "Voz", music: "Música" };
 const LEVEL_LABELS = { info: "INFO", ok: "OK", warn: "AVISO", error: "ERROR" };
 
 function formatLogTime(t) {
@@ -507,15 +507,22 @@ function isHeadingLine(line) {
   return letters.length >= 4 && letters === letters.toUpperCase();
 }
 function extractNarration(raw) {
+  return extractSection(raw, NARRATION_WORD_RE, false);
+}
+// Sección del kit bajo un encabezado cuyo texto cumple `wordRe`. Con
+// `allowPrompt` false se ignoran encabezados con "prompt" (p. ej. "PROMPTS DE IMAGEN").
+function extractSection(raw, wordRe, allowPrompt) {
   const src = String(raw || "");
   const lines = src.split(/\r?\n/);
   let start = -1;
   let inline = "";
+  const inlineRe = new RegExp("^\\s*(?:#{1,6}\\s*)?(?:[^\\wÁÉÍÓÚÑáéíóúñ\\[]{0,6}\\s*)?(?:\\*\\*)?[^:\\n]{0,40}?(?:" + wordRe.source + ")[^:\\n]{0,30}?(?:\\*\\*)?\\s*[:：]\\s*(.+)$", "i");
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (/prompt/i.test(l) || !NARRATION_WORD_RE.test(l)) continue;
-    const m = l.match(/^\s*(?:#{1,6}\s*)?(?:[^\wÁÉÍÓÚÑáéíóúñ\[]{0,6}\s*)?(?:\*\*)?[^:\n]{0,40}?(?:narraci[oó]n|gui[oó]n|voz en off|voice[\s-]?over|locuci[oó]n|texto (?:de|para) (?:la )?voz)[^:\n]{0,30}?(?:\*\*)?\s*[:：]\s*(.+)$/i);
-    if (m && m[1].replace(/\*\*/g, "").trim().length > 0 && l.length > 40) { start = i; inline = m[1].replace(/\*\*/g, "").trim(); break; }
+    if ((!allowPrompt && /prompt/i.test(l)) || !wordRe.test(l)) continue;
+    const m = l.match(inlineRe);
+    const tail = m ? m[m.length - 1] : ""; // el último grupo es el texto tras los ":"
+    if (m && tail.replace(/\*\*/g, "").trim().length > 0 && l.length > 40) { start = i; inline = tail.replace(/\*\*/g, "").trim(); break; }
     if (isHeadingLine(l)) { start = i; break; }
   }
   if (start < 0) return { text: "", rest: src };
@@ -583,4 +590,37 @@ function contentRangeIsFull(header, len) {
   if (start !== 0) return false;
   if (total != null && end + 1 !== total) return false;
   return len == null || len === end + 1;
+}
+
+// --- Música (Mureka, v2.10) ----------------------------------------------
+// Prompt de música del kit: encabezado "## 🎵 MÚSICA", "PROMPT DE MÚSICA",
+// "Música: …", "MUSIC PROMPT"… (aquí SÍ se admite la palabra "prompt").
+const MUSIC_WORD_RE = /(m[uú]sica|music|canci[oó]n|\bsong\b|mureka|banda sonora|soundtrack)/i;
+function extractMusic(raw) {
+  return extractSection(raw, MUSIC_WORD_RE, true);
+}
+// ¿Qué petición "media" es la canción de Mureka? El usuario: al darle al play
+// en Library aparece en Network → Media un archivo que empieza por "music…".
+function musicMediaScore(m) {
+  const url = String((m && m.url) || "");
+  const mime = String((m && m.mime) || "").toLowerCase();
+  if (!url || /^data:/.test(url) || isHeygenUiMedia(url)) return 0;
+  if (m.fromCache) return 0;
+  const last = url.split("?")[0].split("/").pop() || "";
+  let score = 1;
+  if (/^music/i.test(last)) score += 5;
+  else if (/music/i.test(url)) score += 2;
+  if (/^audio\//.test(mime)) score += 3;
+  if (/\.(mp3|wav|m4a|aac|ogg|flac)(\?|$)/i.test(url)) score += 2;
+  if (/^video\//.test(mime)) score -= 1;
+  return Math.max(score, 0);
+}
+function pickMusicMedia(items) {
+  let best = null;
+  let bestScore = 0;
+  for (const m of items || []) {
+    const s = musicMediaScore(m);
+    if (s > bestScore) { best = m; bestScore = s; }
+  }
+  return best;
 }

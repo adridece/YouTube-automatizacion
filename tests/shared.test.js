@@ -293,3 +293,20 @@ test("contentRangeIsFull", () => {
   assert.ok(!S.contentRangeIsFull("bytes 100-90399/90400", 90300));
   assert.ok(S.contentRangeIsFull(null, 5));
 });
+
+test("extractMusic (v2.10): prompt de música del kit, sin romper narración ni prompts", () => {
+  const sample = fs.readFileSync(path.join(__dirname, "..", "examples", "sample-kit.txt"), "utf8");
+  const kit = "## 🎙️ NARRACIÓN\nHola esto es la voz.\n\n## 🎵 PROMPT DE MÚSICA\n```\nEpic orchestral football anthem, 120 bpm\n```\n\n" + sample;
+  assert.strictEqual(S.extractNarration(kit).text, "Hola esto es la voz.");
+  assert.strictEqual(S.extractMusic(kit).text, "Epic orchestral football anthem, 120 bpm");
+  const p = S.splitCombinedPrompts(kit);
+  assert.strictEqual(p.images.size, 3);
+  assert.strictEqual(p.animations.size, 3);
+  assert.strictEqual(S.extractMusic("Música: epic hype trap beat with stadium chants, 30 seconds\n\n## PROMPTS DE IMAGEN\n[001] a").text, "epic hype trap beat with stadium chants, 30 seconds");
+  assert.strictEqual(S.extractMusic(sample).text, "");
+});
+
+test("pickMusicMedia: el archivo music… es la canción", () => {
+  const items = [{ url: "https://x/ui/appear_v1.webm", mime: "video/webm" }, { url: "https://cdn.mureka.ai/open/music/2026/music_abc.mp3", mime: "audio/mpeg" }, { url: "https://cdn.mureka.ai/sfx/click.mp3", mime: "audio/mpeg" }];
+  assert.strictEqual(S.pickMusicMedia(items).url, items[1].url);
+});

@@ -126,6 +126,21 @@ const SCENARIOS = {
     u2: "", u3: "",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: [...FILES, "audio.mp3"], logHas: ["Voz guardada"] },
   },
+  music: {
+    desc: "MÚSICA (Mureka): el kit trae prompt de música; en la pestaña de Mureka se escribe, se pulsa generar UNA vez, se espera a que la canción nueva esté en Library, play → «music…» en la red → musica.mp3 en la carpeta del lote (junto a los vídeos y la voz)",
+    askWhereToSave: true, dest: "folder", heygen: true, mureka: true, timeoutMin: 7,
+    narration: "Una noche en el estadio que nadie olvidará.",
+    musicPrompt: "Epic orchestral football anthem, 120 bpm, rising drums, no vocals",
+    u2: "", u3: "",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: [...FILES, "audio.mp3", "musica.mp3"], logHas: ["Voz guardada", "Música guardada"] },
+  },
+  musiconly: {
+    desc: "SOLO MÚSICA: el kit trae únicamente el prompt de música → no se toca Flow ni HeyGen → musica.mp3 (la canción NUEVA, no la vieja de Library)",
+    askWhereToSave: true, dest: "folder", mureka: true, noFlow: true, kit: "none", timeoutMin: 5,
+    musicPrompt: "Lo-fi chill beat with soft piano",
+    u2: "", u3: "",
+    expect: { scenes: {}, approvals: { u2: 0, u3: 0 }, files: ["musica.mp3"], logHas: ["Música guardada"], mode: "voiceOnly" },
+  },
   voiceonly: {
     desc: "SOLO VOZ: el kit trae únicamente la narración → no se toca Flow, solo HeyGen → audio.mp3 (antes el panel lo bloqueaba)",
     askWhereToSave: true, dest: "folder", heygen: true, noFlow: true, kit: "none",
@@ -204,7 +219,7 @@ async function runScenario(name, sc, server) {
   const chrome = spawn(CHROME, [
     `--user-data-dir=${prof}`, "--no-sandbox", "--no-first-run", "--no-default-browser-check",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--disable-features=DisableLoadExtensionCommandLineSwitch",
-    "--remote-debugging-port=9333", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443, MAP resource2.heygen.ai 127.0.0.1:8443", "--ignore-certificate-errors",
+    "--remote-debugging-port=9333", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443, MAP resource2.heygen.ai 127.0.0.1:8443, MAP www.mureka.ai 127.0.0.1:8443, MAP cdn.mureka.ai 127.0.0.1:8443", "--ignore-certificate-errors",
     "--no-proxy-server", "--window-size=1400,900", "about:blank",
   ], { stdio: "ignore" });
   let browser;
@@ -236,6 +251,7 @@ async function runScenario(name, sc, server) {
     const u2 = await openBg(`https://flow.google.com/u/2/project/aaa?${sc.u2}`);
     const u3 = await openBg(`https://flow.google.com/u/3/project/bbb?${sc.u3}`);
     const hg = sc.heygen ? await openBg(`https://app.heygen.com/create-v4/4585a5a3482e49fea0fef3496df511e4?vt=l&panel=scene&subPanel=voice${sc.hg ? "&" + sc.hg : ""}`) : null;
+    const mu = sc.mureka ? await openBg("https://www.mureka.ai/create") : null;
     await sleep(1500);
     const vis = [await u2.evaluate(() => document.visibilityState), await u3.evaluate(() => document.visibilityState)];
     console.log("  visibilidad de las pestañas de Flow al empezar:", vis.join(", "));
@@ -251,7 +267,7 @@ async function runScenario(name, sc, server) {
     await panel.bringToFront();
     const sample = fs.readFileSync(path.join(ROOT, "examples", "sample-kit.txt"), "utf8");
     const kitBody = sc.kit === "none" ? "" : sc.kit === "imagesOnly" ? sample.slice(0, sample.indexOf("## 🎬")) : sample;
-    await panel.fill("#prompts", (sc.narration ? `## 🎙️ NARRACIÓN\n\`\`\`\n${sc.narration}\n\`\`\`\n\n` : "") + kitBody);
+    await panel.fill("#prompts", (sc.narration ? `## 🎙️ NARRACIÓN\n\`\`\`\n${sc.narration}\n\`\`\`\n\n` : "") + (sc.musicPrompt ? `## 🎵 MÚSICA\n\`\`\`\n${sc.musicPrompt}\n\`\`\`\n\n` : "") + kitBody);
     await panel.fill("#accA_num", "2");
     await panel.fill("#accA_range", "1-2");
     await panel.selectOption("#accA_res", "1080p");
@@ -301,6 +317,7 @@ async function runScenario(name, sc, server) {
       }
       let voiceDone = true;
       if (sc.heygen) { const lg = (await panel.evaluate(() => chrome.storage.local.get("fbrLog"))).fbrLog || []; voiceDone = lg.some((e) => /Voz guardada/.test(e.msg) || (e.phase === "voice" && e.level === "error")); }
+      if (sc.mureka) { const lg = (await panel.evaluate(() => chrome.storage.local.get("fbrLog"))).fbrLog || []; voiceDone = voiceDone && lg.some((e) => /Música guardada/.test(e.msg) || (e.phase === "music" && e.level === "error")); }
       if ((sc.noFlow || (b2 && b3 && b2.status !== "running" && b3.status !== "running")) && (!sc.reloadU2WhenApproved || reloaded) && voiceDone) break;
       await sleep(1500);
     }
@@ -366,7 +383,7 @@ async function runScenario(name, sc, server) {
     // Cada vídeo simulado pesa 350000 + nº de SU escena (los que ya existían, 350000).
     const vids = names.filter((f) => /_\d{3}\.mp4$/.test(f));
     const sizeOk = (f) => files[f] === (sc.genMode === "downloadTest" ? 350000 : 350000 + parseInt(f.match(/_(\d{3})\./)[1], 10));
-    if (E.mode) check(`el panel eligió solo el modo "${E.mode}"`, logTxt.includes(`modo ${E.mode}`) || (E.mode === "voiceOnly" && /solo la voz/.test(logTxt)));
+    if (E.mode) check(`el panel eligió solo el modo "${E.mode}"`, logTxt.includes(`modo ${E.mode}`) || (E.mode === "voiceOnly" && /solo la (voz|música)/.test(logTxt)));
     if (vids.length) check("cada archivo es el vídeo de SU escena (no cruzados)", vids.every(sizeOk), vids.map((f) => `${f}=${files[f]}`).join(" "));
     if (sc.heygen) {
       const hgState = await hg.evaluate(() => ({ text: document.getElementById("script").innerText.replace(/\s+/g, " ").trim(), played: +(sessionStorage.getItem("hgPlayed") || 0), pauses: +(sessionStorage.getItem("hgPauses") || 0), atPlay: sessionStorage.getItem("hgText") || "" }));
@@ -384,6 +401,15 @@ async function runScenario(name, sc, server) {
       check("el panel muestra «Voz terminada» con el archivo", vs.status === "done" && /audio\.mp3$/.test(vs.file || ""), `${vs.status} · ${vs.file}`);
       check("audio.mp3 en la carpeta del lote y es el del texto nuevo", core(hgState.atPlay) === core(want) && files["audio.mp3"] === 200000 + hgState.atPlay.length, `audio.mp3=${files["audio.mp3"]} (esperado ${200000 + hgState.atPlay.length})`);
       }
+    }
+    if (sc.mureka) {
+      const ms = await mu.evaluate(() => ({ gen: +(localStorage.getItem("muGenerated") || 0), played: +(localStorage.getItem("muPlayed") || 0), playedId: localStorage.getItem("muPlayedId") || "", prompt: localStorage.getItem("muPrompt") || "" }));
+      check("Mureka: generar pulsado UNA sola vez", ms.gen === 1, `${ms.gen}`);
+      check("Mureka: el prompt escrito es el del kit", ms.prompt.trim() === sc.musicPrompt, JSON.stringify(ms.prompt.slice(0, 60)));
+      check("Mureka: play en la canción NUEVA (no en la vieja)", /^new1/.test(ms.playedId), ms.playedId);
+      const st = (await panel.evaluate(() => chrome.storage.local.get("fbrMusic"))).fbrMusic || {};
+      check("el panel muestra «Música guardada» con el archivo", st.status === "done" && /musica\.mp3$/.test(st.file || ""), `${st.status} · ${st.file}`);
+      check("musica.mp3 es la canción nueva completa", files["musica.mp3"] === 400000 + sc.musicPrompt.length, `musica.mp3=${files["musica.mp3"]} (esperado ${400000 + sc.musicPrompt.length})`);
     }
     check('ningún diálogo "Guardar como" pendiente', stuck.length === 0, `${downloads.length} descargas vistas, ${stuck.length} atascadas`);
     if (name === "folder" || name === "resume") check("sin ERRORes falsos en el log", !/ERROR: Chrome interrumpió/.test(logTxt));
@@ -438,6 +464,15 @@ async function main() {
       if (m) return sendRange(Buffer.alloc(200000 + parseInt(m[1], 10), 9), "audio/mpeg"); // sin cabeceras CORS, como un CDN
       res.statusCode = 404; return res.end();
     }
+    if ((req.headers.host || "").startsWith("cdn.mureka.ai")) {
+      const m = req.url.match(/\/music_[a-z0-9]+\.mp3\?len=(\d+)/);
+      if (m) return sendRange(Buffer.alloc(400000 + parseInt(m[1], 10), 5), "audio/mpeg");
+      res.statusCode = 404; return res.end();
+    }
+    if ((req.headers.host || "").startsWith("www.mureka.ai")) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.end(fs.readFileSync(path.join(__dirname, "mock-mureka.html")));
+    }
     if ((req.headers.host || "").startsWith("app.heygen.com")) {
       if (req.url.startsWith("/ui/")) return sendRange(Buffer.alloc(6000, 3), "video/webm");
       res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -447,7 +482,7 @@ async function main() {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "voicestop2", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "voicestop2", "music", "musiconly", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));
