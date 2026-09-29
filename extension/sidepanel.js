@@ -425,15 +425,37 @@ const STEP_LABEL = { image: "Imagen", video: "Vídeo", download: "Descarga" };
 const STATUS_LABEL = { pending: "pendiente", running: "en curso", done: "hecho", failed: "fallido", review: "revisar", skipped: "saltado", nopoints: "sin puntos" };
 const PHASE_TEXT = { images: "Generando imágenes", videos: "Generando vídeos", downloads: "Descargando", done: "Terminado", setup: "Preparando" };
 let batches = {};
+let voiceState = null; // chrome.storage "fbrVoice" (lo escribe background.js)
+
+// Tarjeta de la VOZ (HeyGen): en curso / guardada / error, con el motivo.
+function voiceCard() {
+  const v = voiceState;
+  if (!v || !v.status || Date.now() - (v.startedAt || v.t || 0) > 12 * 3600e3) return "";
+  const cls = v.status === "done" ? "ok" : v.status === "error" ? "bad" : "run";
+  const title = v.status === "done" ? "Voz terminada ✅" : v.status === "error" ? "Voz: error" : "Voz: generando…";
+  return `<section class="pcard voice ${cls}" aria-label="Voz de HeyGen" aria-live="polite">
+      <div class="pcard-h"><h2>${icon(v.status === "done" ? "check" : v.status === "error" ? "alert" : "activity", 16)} ${esc(title)}</h2></div>
+      <p class="phase">${esc(v.msg || "")}</p>
+      ${v.file ? `<div class="file">${esc(v.file)}</div>` : ""}
+    </section>`;
+}
 
 function renderProgress() {
   const list = Object.values(batches).sort((a, b) => a.accountKey.localeCompare(b.accountKey));
   const root = $("accountsProgress");
-  const anyRunning = list.some((b) => b.status === "running");
+  const voiceRunning = !!(voiceState && voiceState.status === "running");
+  const anyRunning = list.some((b) => b.status === "running") || voiceRunning;
   $("stop").hidden = !anyRunning;
   $("stop2").hidden = !anyRunning;
   $("start").hidden = anyRunning;
   const chip = $("globalStatus");
+  if (!list.length && voiceCard()) {
+    root.innerHTML = voiceCard();
+    chip.textContent = voiceRunning ? "Voz en curso" : voiceState.status === "done" ? "Voz terminada" : "Voz: error";
+    chip.className = voiceRunning ? "chip running" : voiceState.status === "done" ? "chip ok" : "chip warn";
+    $("progBadge").hidden = true;
+    return;
+  }
   if (!list.length) { root.innerHTML = '<div class="empty"><img src="icons/cerezium.svg" alt="" /><b>Aún no hay ningún lote</b><span>Configúralo en «Lote» y pulsa «Iniciar lote».</span></div>'; chip.textContent = "Inactivo"; chip.className = "chip"; $("progBadge").hidden = true; return; }
 
   let totalPct = 0;
@@ -458,7 +480,7 @@ function renderProgress() {
       </div>
       <p class="hero-t">${nAll} escena(s) · ${list.length} cuenta(s) · ${mins < 1 ? "empezado ahora" : `hace ${mins} min`}</p>
     </section>`;
-  root.innerHTML = hero + list.map((b) => {
+  root.innerHTML = hero + voiceCard() + list.map((b) => {
     const sum = summarizeBatch(b);
     totalPct += sum.percent;
     const statusTxt = b.status === "running" ? PHASE_TEXT[b.phase] || "En curso" : { done: "Terminado", stopped: "Detenido", error: "Parado por error", nopoints: "Sin puntos" }[b.status] || b.status;
@@ -551,6 +573,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   for (const [k, v] of Object.entries(changes)) {
     if (k === "fbrLog") { logEntries = v.newValue || []; renderLog(); }
     if (k.startsWith("batch_")) { if (v.newValue) batches[k.slice(6)] = v.newValue; else delete batches[k.slice(6)]; prog = true; }
+    if (k === "fbrVoice") { voiceState = v.newValue || null; prog = true; if (voiceState && voiceState.status === "done") toast(`Voz terminada: ${voiceState.file || ""}`); }
   }
   if (prog) renderProgress();
 });
@@ -583,6 +606,7 @@ $("uiMode").addEventListener("change", async (e) => {
   const all = await chrome.storage.local.get(null);
   logEntries = all.fbrLog || [];
   for (const [k, v] of Object.entries(all)) if (k.startsWith("batch_") && v && v.order) batches[k.slice(6)] = v;
+  voiceState = all.fbrVoice || null;
   await refreshFolder();
   await armActiveFlowTab().catch(() => {});
   await refreshArmed().catch(() => {});
@@ -592,5 +616,5 @@ $("uiMode").addEventListener("change", async (e) => {
   renderLog();
   let tab = null;
   try { tab = localStorage.getItem("fbrTab"); } catch (e) {}
-  showTab(Object.values(batches).some((b) => b.status === "running") ? "progreso" : tab && TABS.includes(tab) ? tab : "lote");
+  showTab(Object.values(batches).some((b) => b.status === "running") || (voiceState && voiceState.status === "running") ? "progreso" : tab && TABS.includes(tab) ? tab : "lote");
 })();

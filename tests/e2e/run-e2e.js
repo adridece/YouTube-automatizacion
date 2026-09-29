@@ -133,6 +133,13 @@ const SCENARIOS = {
     u2: "", u3: "",
     expect: { scenes: {}, approvals: { u2: 0, u3: 0 }, files: ["audio.mp3"], logHas: ["Voz guardada"], mode: "voiceOnly" },
   },
+  voicebadtext: {
+    desc: "VOZ con el guion que no acepta el texto: la extensión NO pulsa reproducir (HeyGen solo deja 3 previsualizaciones al día) y el panel dice por qué",
+    askWhereToSave: true, dest: "folder", heygen: true, noFlow: true, kit: "none", hg: "writeBroken=1",
+    narration: "Esta narración no se va a poder escribir en el guion.",
+    u2: "", u3: "",
+    expect: { scenes: {}, approvals: { u2: 0, u3: 0 }, files: [], noPlay: true, mode: "voiceOnly" },
+  },
   imgonly: {
     desc: "SOLO IMÁGENES: el kit trae solo los prompts de imagen → se hacen las imágenes sin pedir vídeos (antes el panel lo bloqueaba)",
     askWhereToSave: true, dest: "folder", kit: "imagesOnly",
@@ -207,7 +214,7 @@ async function runScenario(name, sc, server) {
     };
     const u2 = await openBg(`https://flow.google.com/u/2/project/aaa?${sc.u2}`);
     const u3 = await openBg(`https://flow.google.com/u/3/project/bbb?${sc.u3}`);
-    const hg = sc.heygen ? await openBg("https://app.heygen.com/create-v4/4585a5a3482e49fea0fef3496df511e4?vt=l&panel=scene&subPanel=voice") : null;
+    const hg = sc.heygen ? await openBg(`https://app.heygen.com/create-v4/4585a5a3482e49fea0fef3496df511e4?vt=l&panel=scene&subPanel=voice${sc.hg ? "&" + sc.hg : ""}`) : null;
     await sleep(1500);
     const vis = [await u2.evaluate(() => document.visibilityState), await u3.evaluate(() => document.visibilityState)];
     console.log("  visibilidad de las pestañas de Flow al empezar:", vis.join(", "));
@@ -272,7 +279,7 @@ async function runScenario(name, sc, server) {
         await u2.screenshot({ path: path.join(OUT, `flow-panel-pagina-${name}.png`) });
       }
       let voiceDone = true;
-      if (sc.heygen) { const lg = (await panel.evaluate(() => chrome.storage.local.get("fbrLog"))).fbrLog || []; voiceDone = lg.some((e) => /Voz guardada|No pude generar\/guardar la voz/.test(e.msg)); }
+      if (sc.heygen) { const lg = (await panel.evaluate(() => chrome.storage.local.get("fbrLog"))).fbrLog || []; voiceDone = lg.some((e) => /Voz guardada/.test(e.msg) || (e.phase === "voice" && e.level === "error")); }
       if ((sc.noFlow || (b2 && b3 && b2.status !== "running" && b3.status !== "running")) && (!sc.reloadU2WhenApproved || reloaded) && voiceDone) break;
       await sleep(1500);
     }
@@ -344,9 +351,17 @@ async function runScenario(name, sc, server) {
       const hgState = await hg.evaluate(() => ({ text: document.getElementById("script").innerText.replace(/\s+/g, " ").trim(), played: +(sessionStorage.getItem("hgPlayed") || 0), atPlay: sessionStorage.getItem("hgText") || "" }));
       const core = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9ñ]/g, "");
       const want = sc.narration.replace(/\s+/g, " ").trim();
-      check("HeyGen: guion reemplazado por la narración del kit (sin el texto viejo ni repetido)", core(hgState.text) === core(want), JSON.stringify(hgState.text.slice(0, 80)));
-      check("HeyGen: reproducir pulsado una vez (el texto ya estaba bien)", hgState.played === 1, `${hgState.played}`);
+      if (!E.noPlay) check("HeyGen: guion reemplazado por la narración del kit (sin el texto viejo ni repetido)", core(hgState.text) === core(want), JSON.stringify(hgState.text.slice(0, 80)));
+      if (E.noPlay) {
+        check("HeyGen: con el texto mal, NO se pulsa reproducir (no se gasta ninguna previsualización)", hgState.played === 0, `${hgState.played}`);
+        const vs = (await panel.evaluate(() => chrome.storage.local.get("fbrVoice"))).fbrVoice || {};
+        check("el panel muestra la voz con error y el motivo", vs.status === "error" && /no he pulsado reproducir/i.test(vs.msg || ""), JSON.stringify(vs.msg || "").slice(0, 120));
+      } else {
+      check("HeyGen: reproducir pulsado UNA sola vez", hgState.played === 1, `${hgState.played}`);
+      const vs = (await panel.evaluate(() => chrome.storage.local.get("fbrVoice"))).fbrVoice || {};
+      check("el panel muestra «Voz terminada» con el archivo", vs.status === "done" && /audio\.mp3$/.test(vs.file || ""), `${vs.status} · ${vs.file}`);
       check("audio.mp3 en la carpeta del lote y es el del texto nuevo", core(hgState.atPlay) === core(want) && files["audio.mp3"] === 200000 + hgState.atPlay.length, `audio.mp3=${files["audio.mp3"]} (esperado ${200000 + hgState.atPlay.length})`);
+      }
     }
     check('ningún diálogo "Guardar como" pendiente', stuck.length === 0, `${downloads.length} descargas vistas, ${stuck.length} atascadas`);
     if (name === "folder" || name === "resume") check("sin ERRORes falsos en el log", !/ERROR: Chrome interrumpió/.test(logTxt));
@@ -395,7 +410,7 @@ async function main() {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));

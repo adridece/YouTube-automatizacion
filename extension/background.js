@@ -741,13 +741,51 @@ async function saveVoiceBytes(b64, mime, relPath, destMode) {
   return `Descargas/MundoFutFlow/${relPath}`;
 }
 
+// Estado de la voz para el panel (Progreso): { status, msg, file, t, previews }.
+const VOICE_KEY = "fbrVoice";
+async function setVoiceState(patch) {
+  const cur = (await chrome.storage.local.get(VOICE_KEY))[VOICE_KEY] || {};
+  await chrome.storage.local.set({ [VOICE_KEY]: { ...cur, ...patch, t: Date.now() } });
+}
+// HeyGen solo deja PREVISUALIZAR la voz 3 veces al día (prueba real v2.9.2):
+// se cuentan las que pulsa la extensión para no pasarse.
+const PREVIEW_KEY = "fbrVoicePreviews";
+const PREVIEW_MAX = 3;
+function todayStr() { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; }
+async function previewsUsed() {
+  const p = (await chrome.storage.local.get(PREVIEW_KEY))[PREVIEW_KEY];
+  return p && p.day === todayStr() ? p.count : 0;
+}
+async function addPreview() {
+  const n = (await previewsUsed()) + 1;
+  await chrome.storage.local.set({ [PREVIEW_KEY]: { day: todayStr(), count: n } });
+  return n;
+}
+
+let voiceRunning = false;
 async function runVoice(v) {
-  const tab = await findHeygenTab();
-  if (!tab) {
-    vlog("error", "No hay ninguna pestaña de HeyGen abierta: no puedo generar la voz. Abre tu proyecto de HeyGen (app.heygen.com/create-v4/…, panel de voz) y vuelve a lanzar solo la voz o el lote.");
-    notify("Voz: falta la pestaña de HeyGen", "Abre tu proyecto de HeyGen para generar audio.mp3.", true);
-    return;
+  if (voiceRunning) { vlog("warn", "Ya se está generando una voz: no lanzo otra (cada previsualización cuenta)."); return; }
+  voiceRunning = true;
+  try {
+    await setVoiceState({ status: "running", msg: "Preparando HeyGen…", file: null, batchFolder: v.batchFolder, startedAt: Date.now() });
+    const r = await runVoiceInner(v);
+    if (r.ok) {
+      vlog("ok", `Voz guardada: ${r.file}`);
+      await setVoiceState({ status: "done", msg: "Voz guardada", file: r.file });
+      notify("Voz terminada ✅", `audio guardado: ${r.file}`, false);
+    } else {
+      vlog("error", `Voz: ${r.error}`);
+      await setVoiceState({ status: "error", msg: r.error });
+      notify("Voz: no se pudo guardar", String(r.error || "").slice(0, 200), true);
+    }
+  } finally {
+    voiceRunning = false;
   }
+}
+
+async function runVoiceInner(v) {
+  const tab = await findHeygenTab();
+  if (!tab) return { ok: false, error: "no hay ninguna pestaña de HeyGen abierta. Abre tu proyecto de HeyGen (app.heygen.com/create-v4/…, panel de voz) y vuelve a lanzar." };
   const tabId = tab.id;
   if (tab.discarded || tab.status !== "complete") {
     // Chrome la había "dormido" (ahorro de memoria) o aún carga: se recarga y se espera.
@@ -759,98 +797,113 @@ async function runVoice(v) {
     }
     await new Promise((r) => setTimeout(r, 4000));
   }
-  vlog("info", `Voz: uso la pestaña de HeyGen (${(tab.url || "").split("?")[0]}). Escribo la narración (${v.text.split(/\s+/).length} palabras) y pulso reproducir.`);
   chrome.tabs.update(tabId, { autoDiscardable: false }).catch(() => {});
-  try {
-    await dbgEnsure(tabId);
-    netMedia.set(tabId, new Map());
-    await chrome.debugger.sendCommand({ tabId }, "Network.enable", {});
-    // Que el audio no salga de la caché: así siempre hay una petición nueva.
-    await chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: true }).catch(() => {});
-  } catch (e) {
-    vlog("warn", `No pude activar el depurador en HeyGen (${e.message}); busco el audio por otras vías.`);
-  }
-  let saved = null;
+  const used0 = await previewsUsed();
+  if (used0 >= PREVIEW_MAX) return { ok: false, error: `hoy la extensión ya ha usado las ${PREVIEW_MAX} previsualizaciones de voz que permite HeyGen: no pulso reproducir (no se generaría el audio). Mañana vuelve a funcionar.` };
+  vlog("info", `Voz: uso la pestaña de HeyGen (${(tab.url || "").split("?")[0]}). Escribo la narración (${v.text.split(/\s+/).length} palabras). Previsualizaciones usadas hoy por la extensión: ${used0}/${PREVIEW_MAX}.`);
+
+  // 1) ESCRIBIR (se puede repetir: no gasta nada).
+  await setVoiceState({ msg: "Escribiendo la narración en el guion…" });
+  let written = null;
   let lastErr = null;
-  for (let attempt = 1; attempt <= 3 && !saved; attempt++) {
-    try {
-      if (attempt > 1) {
-        vlog("info", `Voz: reintento ${attempt}/3.`);
-        await new Promise((r) => setTimeout(r, 5000));
-      }
-      const since = Date.now();
-      const list = netMedia.get(tabId);
-      if (list) list.clear();
-      const r = await sendToHeygen(tabId, { type: "HG_SPEAK", text: v.text });
-      if (!r || !r.ok) throw new Error((r && r.error) || "la pestaña de HeyGen no respondió");
-      vlog("info", `Narración escrita en el guion${r.partial ? ` (no pude confirmarla entera: el guion tiene ${r.chars} caracteres; sigo igualmente)` : ""} y botón de reproducir pulsado (${r.playHow}${r.realClick ? ", clic real" : ", clic normal"}). Espero el audio nuevo…`);
-      // Espera al NUEVO audio (hasta 2 min: HeyGen lo genera antes de sonar).
-      let found = null;
-      for (let i = 0; i < 120 && !found; i++) {
-        await new Promise((res) => setTimeout(res, 1000));
-        const net = list ? [...list.entries()].filter(([, m]) => m.t >= since - 500 && m.url && !/^data:/.test(m.url)) : [];
-        const audio = net.find(([, m]) => /^audio\//i.test(m.mime)) || net.find(([, m]) => m.type === "Media");
-        if (audio) { found = { requestId: audio[0], ...audio[1], via: "depurador" }; break; }
-        if (i === 15 || i === 45) {
-          // Nada en la red todavía: se vuelve a pulsar reproducir (sin reescribir el texto).
-          const again = await sendToHeygen(tabId, { type: "HG_PLAY", plain: i === 15 }).catch(() => null);
-          vlog("info", `Aún no hay audio nuevo en la red: vuelvo a pulsar reproducir${again && again.ok ? "" : ` (no pude: ${(again && again.error) || "sin respuesta"})`}.`);
-        }
-        if (i % 3 === 2) {
-          const hm = await sendToHeygen(tabId, { type: "HG_MEDIA", since }).catch(() => null);
-          const it = hm && hm.items && hm.items.find((x) => x.url && !/^data:/.test(x.url));
-          if (it) found = { url: it.url, mime: "", via: it.source };
-        }
-      }
-      if (!found) throw new Error("tras pulsar reproducir no apareció ningún audio nuevo en 2 min");
-      vlog("info", `Audio nuevo detectado (${found.via}): ${found.url.slice(0, 90)}${found.url.length > 90 ? "…" : ""}${found.mime ? ` · ${found.mime}` : ""}`);
-      // Esperar a que termine de cargar si lo vio el depurador.
-      if (found.requestId && list) for (let i = 0; i < 30 && !(list.get(found.requestId) || {}).finished; i++) await new Promise((res) => setTimeout(res, 1000));
-      // Bytes: (1) desde la propia página; (2) del depurador; (3) descarga directa.
-      let bytes = null;
-      const f = await sendToHeygen(tabId, { type: "HG_FETCH", url: found.url }).catch((e) => ({ ok: false, error: e.message }));
-      if (f && f.ok && f.size > 1000) bytes = { b64: f.data, mime: f.mime || found.mime };
-      if (!bytes && found.requestId) {
-        try {
-          const body = await chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", { requestId: found.requestId });
-          const b64 = body.base64Encoded ? body.body : btoa(unescape(encodeURIComponent(body.body)));
-          if (b64.length > 1400 && (found.status === 200 || !found.status)) bytes = { b64, mime: found.mime };
-        } catch (e) {}
-      }
-      const ext = audioExtFromMime(bytes ? bytes.mime : found.mime, found.url);
-      const relPath = `${v.batchFolder}/audio.${ext}`;
-      if (ext !== "mp3") vlog("warn", `El audio de HeyGen es ${ext.toUpperCase()}, no MP3: lo guardo como audio.${ext} (sin convertirlo).`);
-      if (bytes) {
-        saved = await saveVoiceBytes(bytes.b64, bytes.mime || "audio/mpeg", relPath, v.destMode);
-      } else if (/^https:/.test(found.url)) {
-        if (v.destMode === "folder") {
-          const res = await offscreenCall({ type: "FS_SAVE_URL", url: found.url, relPath });
-          if (!res || !res.ok) throw new Error(`no pude leer el audio (${(res && res.error) || "sin respuesta"})`);
-          saved = res.path || relPath;
-        } else {
-          await ownDownload(found.url, relPath);
-          saved = `Descargas/MundoFutFlow/${relPath}`;
-        }
-      } else {
-        throw new Error(`no pude leer el audio (${(f && f.error) || "URL no descargable"})`);
-      }
-    } catch (e) {
-      lastErr = e.message;
-      vlog("warn", `Voz: intento ${attempt}/3 fallido: ${e.message}`);
+  for (let attempt = 1; attempt <= 3 && !written; attempt++) {
+    const w = await sendToHeygen(tabId, { type: "HG_WRITE", text: v.text }).catch((e) => ({ ok: false, error: e.message }));
+    if (w && w.ok && w.state === "ok") written = w;
+    else {
+      lastErr = (w && w.error) || `el guion no quedó igual que la narración (${w && w.state}, ${w && w.chars} caracteres)`;
+      vlog("warn", `Voz: escribir el guion, intento ${attempt}/3: ${lastErr}`);
+      await new Promise((r) => setTimeout(r, 3000));
     }
   }
-  if (netMedia.has(tabId)) {
-    netMedia.delete(tabId);
-    chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: false }).catch(() => {});
+  if (!written) return { ok: false, error: `no pude dejar la narración bien escrita en el guion (${lastErr}). NO he pulsado reproducir: no se ha gastado ninguna previsualización.` };
+  vlog("ok", "Narración escrita en el guion y comprobada.");
+
+  // 2) Escuchar la red de la pestaña (lo mismo que DevTools → Network → Media).
+  let list = null;
+  try {
+    await dbgEnsure(tabId);
+    list = new Map();
+    netMedia.set(tabId, list);
+    await chrome.debugger.sendCommand({ tabId }, "Network.enable", {});
+    // Que el audio no salga de la caché: así la petición aparece seguro.
+    await chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: true }).catch(() => {});
+  } catch (e) {
+    vlog("warn", `No pude escuchar la red de HeyGen con el depurador (${e.message}); busco el audio en la propia página.`);
   }
-  const running = await getRunningTabs();
-  if (!running[tabId]) await dbgDetach(tabId);
-  if (saved) {
-    vlog("ok", `Voz guardada: ${saved}`);
-    notify("Voz guardada ✅", saved, false);
-  } else {
-    vlog("error", `No pude generar/guardar la voz: ${lastErr}. Pásame el log (y, si puedes, una captura del panel de voz de HeyGen).`);
-    notify("Voz: no se pudo guardar", String(lastErr || "").slice(0, 120), true);
+  const cleanup = async () => {
+    if (netMedia.has(tabId)) {
+      netMedia.delete(tabId);
+      await chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: false }).catch(() => {});
+    }
+    const running = await getRunningTabs();
+    if (!running[tabId]) await dbgDetach(tabId);
+  };
+
+  try {
+    // 3) Pulsar reproducir UNA sola vez (gasta una previsualización).
+    await setVoiceState({ msg: "Pulsando reproducir (1 previsualización)…" });
+    const since = Date.now();
+    const p = await sendToHeygen(tabId, { type: "HG_PLAY_ONCE", text: v.text }).catch((e) => ({ ok: false, error: e.message }));
+    if (!p || !p.ok) return { ok: false, error: `${(p && p.error) || "la pestaña de HeyGen no respondió"}. No se ha gastado ninguna previsualización.` };
+    const used = await addPreview();
+    vlog("info", `Botón de reproducir pulsado UNA vez (${p.real ? "clic real" : "clic normal"}). Previsualizaciones usadas hoy: ${used}/${PREVIEW_MAX}. Espero a que HeyGen genere el audio (hasta 4 min, sin volver a pulsar)…`);
+    await setVoiceState({ msg: `Generando la voz en HeyGen… (previsualización ${used}/${PREVIEW_MAX} de hoy)` });
+
+    // 4) Esperar el audio nuevo SIN volver a pulsar.
+    let found = null;
+    for (let i = 0; i < 240 && !found; i++) {
+      await new Promise((res) => setTimeout(res, 1000));
+      const net = list ? [...list.entries()].filter(([, m]) => m.t >= since - 500 && m.url && !/^data:/.test(m.url)) : [];
+      const audio = net.find(([, m]) => /^audio\//i.test(m.mime)) || net.find(([, m]) => m.type === "Media");
+      if (audio) { found = { requestId: audio[0], ...audio[1], via: "red" }; break; }
+      if (i % 3 === 2) {
+        const hm = await sendToHeygen(tabId, { type: "HG_MEDIA", since }).catch(() => null);
+        const it = hm && hm.items && hm.items.find((x) => x.url && !/^data:/.test(x.url));
+        if (it) found = { url: it.url, mime: "", via: it.source };
+      }
+      if (i > 0 && i % 60 === 0) vlog("info", `Sigo esperando el audio de HeyGen (${i / 60} min)…`);
+    }
+    if (!found) return { ok: false, error: `pulsé reproducir una vez pero en 4 min no apareció el audio en la red. No lo vuelvo a pulsar para no gastar otra previsualización (usadas hoy: ${used}/${PREVIEW_MAX}). Mira en HeyGen si suena la voz y pásame el log.` };
+    vlog("info", `Audio nuevo detectado (${found.via}): ${found.url.slice(0, 90)}${found.url.length > 90 ? "…" : ""}${found.mime ? ` · ${found.mime}` : ""}`);
+    await setVoiceState({ msg: "Guardando el audio…" });
+    if (found.requestId && list) for (let i = 0; i < 60 && !(list.get(found.requestId) || {}).finished; i++) await new Promise((res) => setTimeout(res, 1000));
+
+    // 5) Guardar (se puede reintentar: no gasta previsualizaciones).
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        let bytes = null;
+        const f = await sendToHeygen(tabId, { type: "HG_FETCH", url: found.url }).catch((e) => ({ ok: false, error: e.message }));
+        if (f && f.ok && f.size > 1000) bytes = { b64: f.data, mime: f.mime || found.mime };
+        if (!bytes && found.requestId) {
+          try {
+            const body = await chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", { requestId: found.requestId });
+            const b64 = body.base64Encoded ? body.body : btoa(unescape(encodeURIComponent(body.body)));
+            if (b64.length > 1400 && (found.status === 200 || !found.status)) bytes = { b64, mime: found.mime };
+          } catch (e) {}
+        }
+        const ext = audioExtFromMime(bytes ? bytes.mime : found.mime, found.url);
+        const relPath = `${v.batchFolder}/audio.${ext}`;
+        if (ext !== "mp3") vlog("warn", `El audio de HeyGen es ${ext.toUpperCase()}, no MP3: lo guardo como audio.${ext} (sin convertirlo).`);
+        if (bytes) return { ok: true, file: await saveVoiceBytes(bytes.b64, bytes.mime || "audio/mpeg", relPath, v.destMode) };
+        if (/^https:/.test(found.url)) {
+          if (v.destMode === "folder") {
+            const res = await offscreenCall({ type: "FS_SAVE_URL", url: found.url, relPath });
+            if (!res || !res.ok) throw new Error(`no pude leer el audio (${(res && res.error) || "sin respuesta"})`);
+            return { ok: true, file: res.path || relPath };
+          }
+          await ownDownload(found.url, relPath);
+          return { ok: true, file: `Descargas/MundoFutFlow/${relPath}` };
+        }
+        throw new Error(`no pude leer el audio (${(f && f.error) || "URL no descargable"})`);
+      } catch (e) {
+        lastErr = e.message;
+        vlog("warn", `Voz: guardar el audio, intento ${attempt}/3: ${e.message}`);
+        await new Promise((res) => setTimeout(res, 3000));
+      }
+    }
+    return { ok: false, error: `el audio se generó pero no pude guardarlo: ${lastErr}` };
+  } finally {
+    await cleanup();
   }
 }
 

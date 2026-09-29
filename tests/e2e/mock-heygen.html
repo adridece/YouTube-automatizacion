@@ -39,6 +39,8 @@ const P = new URLSearchParams(location.search);
 const ed = document.getElementById("script");
 let fmtT = null;
 ed.addEventListener("input", () => {
+  // writeBroken=1: el guion no acepta el texto nuevo (vuelve al viejo).
+  if (P.get("writeBroken")) { setTimeout(() => { ed.innerHTML = "<p>Texto viejo que había antes en el guion.</p>"; }, 50); return; }
   clearTimeout(fmtT);
   fmtT = setTimeout(() => {
     const txt = ed.innerText;

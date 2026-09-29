@@ -254,3 +254,9 @@ textarea { min-height: 140px; resize: vertical; font: 12px/1.55 "JetBrains Mono"
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media (max-width: 340px) { .grid3 { grid-template-columns: 1fr 1fr; } .grid2 { grid-template-columns: 1fr; } }
+
+/* Tarjeta de la voz (HeyGen) */
+.pcard.voice h2 { display: flex; align-items: center; gap: 6px; }
+.pcard.voice.ok { border-color: var(--done, #f5c2cd); }
+.pcard.voice.bad { border-color: var(--err, #ff8a5c); }
+.pcard.voice.run { border-color: var(--cherry, #e8234b); }
