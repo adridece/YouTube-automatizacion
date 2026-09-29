@@ -778,21 +778,6 @@ async function setVoiceState(patch) {
   const cur = (await chrome.storage.local.get(VOICE_KEY))[VOICE_KEY] || {};
   await chrome.storage.local.set({ [VOICE_KEY]: { ...cur, ...patch, t: Date.now() } });
 }
-// HeyGen solo deja PREVISUALIZAR la voz 3 veces al día (prueba real v2.9.2):
-// se cuentan las que pulsa la extensión para no pasarse.
-const PREVIEW_KEY = "fbrVoicePreviews";
-const PREVIEW_MAX = 3;
-function todayStr() { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; }
-async function previewsUsed() {
-  const p = (await chrome.storage.local.get(PREVIEW_KEY))[PREVIEW_KEY];
-  return p && p.day === todayStr() ? p.count : 0;
-}
-async function addPreview() {
-  const n = (await previewsUsed()) + 1;
-  await chrome.storage.local.set({ [PREVIEW_KEY]: { day: todayStr(), count: n } });
-  return n;
-}
-
 let voiceRunning = false;
 async function runVoice(v) {
   if (voiceRunning) { vlog("warn", "Ya se está generando una voz: no lanzo otra (cada previsualización cuenta)."); return; }
@@ -829,9 +814,7 @@ async function runVoiceInner(v) {
     await new Promise((r) => setTimeout(r, 4000));
   }
   chrome.tabs.update(tabId, { autoDiscardable: false }).catch(() => {});
-  const used0 = await previewsUsed();
-  if (used0 >= PREVIEW_MAX) return { ok: false, error: `hoy la extensión ya ha usado las ${PREVIEW_MAX} previsualizaciones de voz que permite HeyGen: no pulso reproducir (no se generaría el audio). Mañana vuelve a funcionar.` };
-  vlog("info", `Voz: uso la pestaña de HeyGen (${(tab.url || "").split("?")[0]}). Escribo la narración (${v.text.split(/\s+/).length} palabras). Previsualizaciones usadas hoy por la extensión: ${used0}/${PREVIEW_MAX}.`);
+  vlog("info", `Voz: uso la pestaña de HeyGen (${(tab.url || "").split("?")[0]}). Escribo la narración (${v.text.split(/\s+/).length} palabras).`);
 
   // 1) ESCRIBIR (se puede repetir: no gasta nada).
   await setVoiceState({ msg: "Escribiendo la narración en el guion…" });
@@ -945,9 +928,10 @@ async function runVoiceInner(v) {
     const since = Date.now();
     const p = await sendToHeygen(tabId, { type: "HG_PLAY_ONCE", text: v.text }).catch((e) => ({ ok: false, error: e.message }));
     if (!p || !p.ok) return { ok: false, error: `${(p && p.error) || "la pestaña de HeyGen no respondió"}. No se ha gastado ninguna previsualización.` };
-    const used = await addPreview();
-    vlog("info", `Botón de reproducir pulsado UNA vez (${p.real ? "clic real" : "clic normal"}). Previsualizaciones usadas hoy: ${used}/${PREVIEW_MAX}. Espero el audio (id=…) sin volver a pulsar…`);
-    await setVoiceState({ msg: `Generando la voz en HeyGen… (previsualización ${used}/${PREVIEW_MAX} de hoy)` });
+    // Se pulsa play UNA sola vez por lote (cada pulsación es una previsualización
+    // de HeyGen); ya no hay tope diario propio (lo pidió el usuario, v2.9.6).
+    vlog("info", `Botón de reproducir pulsado UNA vez (${p.real ? "clic real" : "clic normal"}). Espero el audio (id=…) sin volver a pulsar…`);
+    await setVoiceState({ msg: "Generando la voz en HeyGen…" });
 
     // 4) Esperar la voz. Si en 90 s no aparece, RECARGAR la página de HeyGen
     //    (idea del usuario: al recargar, el audio ya generado sale en la red).
@@ -975,7 +959,7 @@ async function runVoiceInner(v) {
       return waitVoice(since2, 120, "Tras recargar");
     };
     if (!found) found = await tryReload(`Tras reproducir y parar, la voz no apareció en la red (vi: ${describe(seen(since)) || "nada"}).`);
-    if (!found) return { ok: false, error: `pulsé reproducir una vez y recargué la página, pero no apareció el audio (id=…) en la red. No vuelvo a pulsar para no gastar otra previsualización (usadas hoy: ${used}/${PREVIEW_MAX}). Pásame el log.` };
+    if (!found) return { ok: false, error: `pulsé reproducir una vez y recargué la página, pero no apareció el audio (id=…) en la red. No vuelvo a pulsar para no gastar otra previsualización. Pásame el log.` };
     vlog("info", `Voz detectada (${found.via || "red"}): ${found.url.slice(0, 100)}${found.url.length > 100 ? "…" : ""} · ${found.status || "?"}${found.mime ? " · " + found.mime : ""}`);
     await setVoiceState({ msg: "Guardando el audio…" });
 
