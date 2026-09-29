@@ -45,6 +45,10 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
   aviso de error; su menú tiene «Descargar» pero no entrega nada. [SUPUESTO] el texto exacto del aviso (se buscan "error",
   "algo ha ido mal", "no se te ha cobrado"…): pedir captura.
 
+- **[V-indirecto, prueba real v2.10.1]** Los tiles de vídeo terminados **no traen identificador estable** (ni ids ni `<video src>` que
+  la extensión vea: clave "seq") y Flow **redibuja la cuadrícula** (nodos nuevos) al terminar un vídeo → nunca identificar "vídeo
+  nuevo" / "error nuevo" por nodo o clave: contar.
+
 ## Menú contextual (clic derecho sobre un tile)
 - **[V-indirecto]** Abrirlo con un `MouseEvent('contextmenu')` sintético funciona (las descargas de la extensión se dispararon).
 - **[V]** Vive en `.cdk-overlay-container`; items `flow-menu-item` (el texto incluye el nombre del icono, p. ej. "downloadDescargar").

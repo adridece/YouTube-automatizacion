@@ -454,7 +454,9 @@ function buildVideoTileName(prefix, num, batchFolder) {
 // ¿El tile es una tarjeta de ERROR de Flow y no un resultado? [V] "No se ha
 // podido generar…"; el resto [SUPUESTO] (prueba real v2.10: errores en el vídeo).
 function tileLooksFailed(text) {
-  return /no se ha podido generar|no se te ha cobrado|algo (ha )?(ido|salido) mal|se ha producido un error|ha fallado|couldn.?t generate|something went wrong|generation failed|(^|[^a-záéíóúñ])error/i.test(String(text || ""));
+  // (v2.10.3: SIN la palabra suelta "error": un tile de vídeo bueno podría llevarla
+  // como icono oculto y se daría por fallido un vídeo que sí salió → se pagaría otra vez.)
+  return /no se ha podido generar|no se te ha cobrado|algo (ha )?(ido|salido) mal|se ha producido un error|couldn.?t generate|something went wrong|generation failed/i.test(String(text || ""));
 }
 function tileLooksInProgress(text) {
   return /\b\d{1,3}\s?%|generando|en cola|procesando|preparando/i.test(String(text || ""));
@@ -472,7 +474,14 @@ function buildSoftenNote(kind, attempt) {
   if (attempt === 2) {
     return `(El intento anterior falló o fue bloqueado por las políticas de contenido. Reformula ${what} de forma un poco más suave y segura, sin cambiar la idea. ${keep})`;
   }
-  return `(Intento ${attempt}: ha vuelto a bloquearse. Suaviza más ${what}: sustituye cualquier elemento que pueda considerarse violento, sexual, peligroso, de marca/logotipo o de una persona real identificable por equivalentes neutros o genéricos. ${keep})`;
+  if (attempt <= 4) {
+    return `(Intento ${attempt}: ha vuelto a fallar. Suaviza más ${what}: sustituye cualquier elemento que pueda considerarse violento, sexual, peligroso, de marca/logotipo o de una persona real identificable por equivalentes neutros o genéricos. ${keep})`;
+  }
+  // Intentos avanzados: además, simplificar lo que pasa (sin cambiar el estilo).
+  const simplify = kind === "video"
+    ? "Si hace falta, simplifica la acción: movimientos más suaves y lentos, sin contacto físico brusco ni caídas, y menos elementos a la vez"
+    : "Si hace falta, simplifica la composición: menos elementos y detalles más neutros";
+  return `(Intento ${attempt}: sigue fallando. Reescribe ${what} con palabras más neutras y seguras. ${simplify}, pero conserva los mismos personajes, el mismo estilo visual, los mismos colores y el mismo encuadre. ${keep})`;
 }
 
 // ¿El nombre de un tile de imagen corresponde a la escena `label` ("006")?

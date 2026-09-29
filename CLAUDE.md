@@ -42,7 +42,14 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (29 sep 2026 — v2.10.1, "Cerezium Autopilot")
+## Estado actual (29 sep 2026 — v2.10.3, "Cerezium Autopilot")
+v2.10.3 (BUG_HISTORY #80, **prueba real: el mismo vídeo se generaba varias veces**): "salió/falló" se decide CONTANDO vídeos buenos y
+avisos de error (los tiles de Flow no tienen id estable y se redibujan); un fallo se confirma 60 s; antes de reintentar se mira si el
+vídeo llegó tarde. e2e: `realtiles`.
+
+v2.10.2 (BUG_HISTORY #79): los vídeos que Flow falla se reintentan **siempre** (hasta 5 vueltas extra, suavizando cada vez más con el
+mismo estilo); antes un fallo tras "Aprobar" no entraba en la 2.ª vuelta. e2e: `alwaysretry`.
+
 **Prueba real v2.10.0: la música de Mureka funciona** (y la voz de HeyGen funcionó a las 10:08). v2.10.1 (BUG_HISTORY #78): un vídeo
 que Flow falla deja un tile SIN vídeo → se reconoce como fallo y se reintenta (antes se daba por bueno y la descarga se colgaba);
 si falta el botón de generar tras las imágenes se espera y no se re-adjunta la imagen. e2e: `videoerror`, `busyagent`.
@@ -107,6 +114,9 @@ sin foco → v2.4: rotación de formas de escribir/enviar. **Prueba real v2.4.0*
 - **Nunca regenerar solo un vídeo cuyo coste ya se aprobó** (se marca "revisar"): repetirlo puede cobrar dos veces.
 - **El vídeo de una escena se identifica por diferencia de tiles** (antes/después), nunca por posición en el DOM ni por el
   nombre (el Agent renombra mal los vídeos). Se descarga **en cuanto aparece**, y nunca hay dos vídeos generándose a la vez.
+- **Nunca pagar dos veces un vídeo**: "salió/falló" se decide por CUENTAS (vídeos buenos / avisos de error antes y después), nunca
+  por "tile nuevo" (los tiles se redibujan sin id estable). Un fallo se confirma antes de reintentar, y antes de reintentar se
+  comprueba si el vídeo anterior llegó tarde. La palabra "error" suelta no es un fallo.
 - **Un tile de vídeo SIN fuente de vídeo no es un vídeo terminado** (puede ser el aviso de error de Flow): se espera o se trata como fallo.
 - **Nunca enviar un prompt de vídeo sin comprobar que su imagen quedó adjunta** (podría cobrar un vídeo sin referencia).
 - **HeyGen: pulsar reproducir UNA sola vez por lote** (máx. 3 previsualizaciones al día): nunca reintentar el clic. A los 10 s se pulsa

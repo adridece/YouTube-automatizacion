@@ -64,6 +64,7 @@ const CONFIG = {
   assetListWaitMs: 10000,
   agentReplyIdleMs: 180000, // el Agent contestó y lleva 3 min sin hacer nada → se reintenta
   rateLimitMaxRetries: 4,
+  videoExtraRounds: 5, // vueltas extra al final para los vídeos que fallaron sin cobrar
   download: { createdTimeoutMs: 90000, completeTimeoutMs: 300000, attempts: 3 },
   maxAttemptsPerScene: 6, // por defecto; se cambia en el panel (Opciones avanzadas)
 };
@@ -351,6 +352,7 @@ function snapshotTiles() {
     videoKeys: videos.map(tileKey),
     imageKeys: images.map(tileKey),
     imageCount: images.length,
+    counts: videoCounts(),
   };
 }
 function newVideoTiles(before) {
@@ -897,7 +899,16 @@ function videoSrcOf(tile) {
   const list = [v.currentSrc, v.src, ...$$("source", v).map((x) => x.src)].filter(Boolean);
   return list.find((u) => /^(https:|blob:)/.test(u)) || null;
 }
-function isErrorTile(t) { return tileLooksFailed(t.textContent || ""); }
+// Un tile con vídeo reproducible NUNCA es un error.
+function isErrorTile(t) { return tileLooksFailed(t.textContent || "") && !videoSrcOf(t); }
+// v2.10.3 (prueba real: el mismo vídeo generado 4 veces): en Flow real los tiles
+// de vídeo no traen identificador estable y al redibujarse la cuadrícula los
+// tiles VIEJOS parecen nuevos (p. ej. el aviso de error de un fallo anterior).
+// Por eso "salió" / "falló" se decide CONTANDO (un redibujado no cambia la cuenta).
+function videoCounts() {
+  const tiles = $$(CONFIG.videoTileTag).filter((t) => !t.closest(CONFIG.pendingTileTag));
+  return { good: tiles.filter((t) => tileReady(t) && !isErrorTile(t)).length, err: tiles.filter(isErrorTile).length };
+}
 // Pasa el ratón (sintético) por encima del tile: Flow puede cargar el <video> al hacerlo.
 function hoverTile(t) {
   for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "mousemove"]) {
@@ -913,21 +924,21 @@ function freshVideoTiles(beforeKeys, excludeKeys) {
 async function waitForSceneVideo(sendRes, maxWaitMs) {
   const assigned = () => batch.order.map((m) => batch.scenes[m].videoKey).filter(Boolean);
   const basePending = Math.max(sendRes.before.pending, ignoredPending);
+  const base = sendRes.before.counts || videoCounts();
   let lastInProgressNote = 0;
   let readyKey = null;
   let readySince = 0;
   let lastHover = 0;
   let noSrcLogged = false;
+  let failSince = 0;
   const cond = () => {
     rejectStrayCostDialogs("mientras se generaba el vídeo");
     const sig = detectNewSignals(sendRes.textBefore, agentPanelText());
-    if (sig.policy) return { error: "policy" };
     const fresh = freshVideoTiles(sendRes.before.videoKeys, assigned());
-    if (fresh.find(isErrorTile)) return { error: "genError" };
-    if (sig.genError && !fresh.length && $$(CONFIG.pendingTileTag).length <= basePending) return { error: "genError" };
-    const generating = $$(CONFIG.pendingTileTag).length > basePending || fresh.some((t) => !tileReady(t));
+    const generating = $$(CONFIG.pendingTileTag).length > basePending || fresh.some((t) => !tileReady(t) && !isErrorTile(t));
     if (generating) {
       readyKey = null;
+      failSince = 0;
       if (Date.now() - lastInProgressNote > 60000) {
         lastInProgressNote = Date.now();
         const pct = fresh.map((t) => (t.textContent || "").match(/\d{1,3}\s?%/)).find(Boolean);
@@ -935,24 +946,38 @@ async function waitForSceneVideo(sendRes, maxWaitMs) {
       }
       return null;
     }
-    const ready = fresh.filter((t) => tileReady(t) && !isErrorTile(t));
-    if (!ready.length) { readyKey = null; return null; }
-    const pick = pickNewVideoKey(ready.map(tileKey), []);
-    const el = ready.find((t) => tileKey(t) === pick.key);
-    if (!el) return null;
-    if (pick.key !== readyKey) { readyKey = pick.key; readySince = Date.now(); return null; }
-    const src = videoSrcOf(el);
-    if (!src) {
-      // Prueba real v2.10: un tile SIN vídeo dado por bueno a los 27 s era un
-      // fallo de Flow (no se descargaba nada). Sin fuente de vídeo: si el Agent
-      // dijo que falló → fallo (gratis); si no, se espera más y se pasa el ratón.
-      if (sig.genError) return { error: "genError" };
-      if (Date.now() - lastHover > 5000) { lastHover = Date.now(); hoverTile(el); }
-      if (!noSrcLogged && Date.now() - readySince > 20000) { noSrcLogged = true; log("info", `El tile nuevo aún no tiene vídeo (dice: «${tileText(el)}»); espero a que Flow lo termine de verdad…`); }
+    const c = videoCounts();
+    // ¿Hay un vídeo bueno MÁS que antes de enviar? → salió (aunque también haya avisos).
+    if (c.good > base.good) {
+      failSince = 0;
+      const ready = fresh.filter((t) => tileReady(t) && !isErrorTile(t));
+      if (!ready.length) { readyKey = null; return null; }
+      const pick = pickNewVideoKey(ready.map(tileKey), []);
+      const el = ready.find((t) => tileKey(t) === pick.key);
+      if (!el) return null;
+      if (pick.key !== readyKey) { readyKey = pick.key; readySince = Date.now(); return null; }
+      const src = videoSrcOf(el);
+      if (!src) {
+        if (Date.now() - lastHover > 5000) { lastHover = Date.now(); hoverTile(el); }
+        if (!noSrcLogged && Date.now() - readySince > 20000) { noSrcLogged = true; log("info", `El vídeo nuevo aún no muestra su fuente (dice: «${tileText(el)}»); espero a que Flow lo termine del todo…`); }
+      }
+      const need = src ? 5000 : 45000;
+      if (Date.now() - readySince < need) return null;
+      return { key: pick.key, el, ambiguous: pick.ambiguous, count: ready.length };
     }
-    const need = src ? 5000 : 90000;
-    if (Date.now() - readySince < need) return null;
-    return { key: pick.key, el, ambiguous: pick.ambiguous, count: ready.length };
+    readyKey = null;
+    // Sin vídeo nuevo: ¿hay señal de fallo NUEVA? (más avisos de error que antes,
+    // o el Agent lo dice). Se CONFIRMA durante un rato antes de darlo por fallido,
+    // por si el vídeo aparece: nunca se repite un vídeo que sí salió.
+    const hint = sig.policy ? "policy" : c.err > base.err ? "genError" : sig.genError ? "genError" : null;
+    if (!hint) { failSince = 0; return null; }
+    const confirmMs = hint === "policy" ? 30000 : 60000;
+    if (!failSince) {
+      failSince = Date.now();
+      log("info", `Parece que Flow no pudo generar el vídeo (${hint === "policy" ? "bloqueo por políticas" : c.err > base.err ? "aviso de error nuevo en la cuadrícula" : "el Agent dice que no se pudo generar"}). Lo compruebo durante ${confirmMs / 1000} s antes de reintentar, por si el vídeo aparece.`);
+    }
+    if (Date.now() - failSince < confirmMs) return null;
+    return { error: hint };
   };
   let r = await tryWait(cond, maxWaitMs, "el vídeo nuevo");
   // Si se acaba la espera pero Flow sigue visiblemente generando (cola), se
@@ -972,6 +997,18 @@ async function waitForSceneVideo(sendRes, maxWaitMs) {
 function sceneRetryable(n, cfg) {
   const s = batch.scenes[n];
   return s.video === "failed" && !s.videoApproved && s.image === "done" && !!(cfg.animations || {})[n] && s.failKind !== "noprompt";
+}
+
+// ¿Hay un vídeo bueno de más desde el último envío de esta escena (descontando
+// los de otras escenas terminadas después)? Solo si Flow no está generando nada.
+function lateVideoForScene(n) {
+  const s = batch.scenes[n];
+  if (s.lastSendGood == null || !Array.isArray(s.lastSendKeys)) return null;
+  if ($$(CONFIG.pendingTileTag).length > ignoredPending) return null;
+  const othersDone = batch.order.filter((m) => m !== n && batch.scenes[m].doneAt && batch.scenes[m].doneAt > s.lastSendAt).length;
+  if (videoCounts().good <= s.lastSendGood + othersDone) return null;
+  const others = batch.order.filter((m) => m !== n).map((m) => batch.scenes[m].videoKey).filter(Boolean);
+  return freshVideoTiles(s.lastSendKeys, others).filter((t) => tileReady(t) && !isErrorTile(t))[0] || null;
 }
 
 async function processSceneVideo(n, cfg, maxWaitMs, pass) {
@@ -1014,10 +1051,20 @@ async function processSceneVideo(n, cfg, maxWaitMs, pass) {
   let imageStillAttached = false; // el intento anterior no llegó a salir: su imagen sigue en la caja
   const maxAttempts = Math.max(1, cfg.maxRetries || CONFIG.maxAttemptsPerScene);
   for (let attempt = 1; attempt <= maxAttempts && !outcome && !haltAfterScene; attempt++) {
+    // Antes de VOLVER a pedirlo: ¿el envío anterior sí dio vídeo? (llegó tarde o
+    // se creyó fallido). Entonces se usa ese y NO se paga otro.
+    const late = lateVideoForScene(n);
+    if (late) {
+      videoElByScene.set(n, late);
+      await setStep(n, "video", "done", { videoKey: tileKey(late), error: null, failKind: null, doneAt: Date.now() });
+      log("ok", "El vídeo de esta escena SÍ se generó (apareció después): lo uso y NO lo vuelvo a pedir.");
+      outcome = "done";
+      break;
+    }
     ui.setStatus(`Escena ${pad3(n)}: vídeo (intento ${attempt}/${maxAttempts}${pass > 1 ? ", 2.ª vuelta" : ""})`, "info");
     await setStep(n, "video", "running", { videoApproved: false, error: null });
     const base = buildPrompt(strongDuration);
-    const softenLevel = attempt + (pass > 1 ? 2 : 0);
+    const softenLevel = attempt + (pass - 1) * 2; // cada vuelta, un poco más suave
     const text = softenLevel === 1 ? base : `${base}\n\n${buildSoftenNote("video", softenLevel)}`;
     if (attempt > 1) log("info", `Reintento ${attempt}/${maxAttempts}: pido al Agent el mismo vídeo con el prompt suavizado.`);
     let res;
@@ -1080,13 +1127,17 @@ async function processSceneVideo(n, cfg, maxWaitMs, pass) {
         // ella se puede volver a encontrar SU vídeo aunque Flow redibuje el tile.
         s.beforeVideoKeys = res.before.videoKeys;
         s.sentAt = Date.now();
+        // Para reconocer después un vídeo de ESTE envío que llegue tarde.
+        s.lastSendGood = (res.before.counts || videoCounts()).good;
+        s.lastSendKeys = res.before.videoKeys;
+        s.lastSendAt = s.sentAt;
         await saveBatch();
         log("info", `Generando el vídeo… (espero hasta ${Math.round(maxWaitMs / 60000)} min, más si Flow sigue en cola)`);
         const v = await waitForSceneVideo(res, maxWaitMs);
         if (v.key) {
           if (v.ambiguous) log("warn", `Aparecieron ${v.count} vídeos nuevos terminados a la vez; asigno a esta escena el más reciente. Revisa que sea el correcto.`);
           videoElByScene.set(n, v.el);
-          await setStep(n, "video", "done", { videoKey: v.key, error: null, failKind: null });
+          await setStep(n, "video", "done", { videoKey: v.key, error: null, failKind: null, doneAt: Date.now() });
           log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s${videoSrcOf(v.el) ? "" : " (el tile aún no muestra su fuente de vídeo)"}.`);
           if (!keyIsStable(v.key)) log("info", `Aviso técnico: el tile de este vídeo no trae un identificador estable (${v.key.split(":")[0]}); lo descargo ya para no perderlo.`);
           outcome = "done";
@@ -1125,9 +1176,11 @@ async function processSceneVideo(n, cfg, maxWaitMs, pass) {
     await setStep(n, "video", "review", { error: `${lastError}. No lo repito solo para no gastar puntos dos veces; al final del lote vuelvo a mirar si apareció`, reviewSince: Date.now() });
     log("error", `Vídeo a REVISAR: ${lastError}. No lo repito para no cobrar dos veces; al final vuelvo a comprobar si apareció.`);
   } else if (outcome !== "done") {
-    await setStep(n, "video", "failed", { error: lastError || "no se pudo generar", failKind });
+    // Si Flow dijo que falló (o se rechazó por coste), no se cobró nada aunque se
+    // hubiera pulsado "Aprobar": la escena se puede volver a intentar.
+    await setStep(n, "video", "failed", { error: lastError || "no se pudo generar", failKind, ...(["content", "cost"].includes(failKind) ? { videoApproved: false } : {}) });
     await setStep(n, "download", "skipped");
-    log("error", `No se pudo generar el vídeo de la escena ${pad3(n)}: ${lastError}.${pass === 1 ? " Sigo con la siguiente y lo reintento solo al final (no cuesta puntos)." : ""}`);
+    log("error", `No se pudo generar el vídeo de la escena ${pad3(n)}: ${lastError}.${pass <= CONFIG.videoExtraRounds ? " Sigo con la siguiente y lo reintento solo al final, suavizando más el prompt (no cuesta puntos)." : ""}`);
   } else if (!["dryRun", "imagesOnly"].includes(cfg.genMode)) {
     // DESCARGA INMEDIATA: ahora sabemos seguro cuál es su vídeo.
     await downloadScene(n, "video", cfg);
@@ -1143,20 +1196,32 @@ async function phaseVideos(cfg) {
   const maxWaitMs = Math.max(cfg.maxWaitMs || 0, 10 * 60000);
   for (const n of batch.order) await processSceneVideo(n, cfg, maxWaitMs, 1);
 
-  // SEGUNDA VUELTA automática: las escenas que fallaron sin cobrar (bloqueo,
-  // coste > 10 rechazado, no se pudo adjuntar/enviar) se intentan otra vez,
-  // con el prompt más suavizado y la duración remarcada.
+  // VUELTAS automáticas (v2.10.2, el usuario: "que se generen siempre, como
+  // las imágenes"): las escenas que fallaron sin cobrar (Flow no pudo, bloqueo,
+  // no se pudo adjuntar/enviar) se vuelven a intentar hasta CONFIG.videoExtraRounds
+  // vueltas, cada una suavizando un poco más el prompt pero con la misma escena,
+  // estilo y duración. Un coste > 10 solo se reintenta en la 2.ª vuelta (si
+  // sigue pidiendo más, el problema es el modelo de vídeo, no el prompt).
   if (!cfg.dryRun) {
-    const again = batch.order.filter((n) => sceneRetryable(n, cfg));
-    if (again.length) {
+    for (let pass = 2; pass <= CONFIG.videoExtraRounds + 1; pass++) {
+      const again = batch.order.filter((n) => sceneRetryable(n, cfg) && (pass === 2 || batch.scenes[n].failKind !== "cost"));
+      if (!again.length) break;
       ctxScene = null;
-      log("warn", `Segunda vuelta automática para las escenas que fallaron (no costaron puntos): ${again.map(pad3).join(", ")}. Empiezo en 30 s.`);
-      await sleep(30000);
+      const waitS = pass === 2 ? 30 : 60;
+      log("warn", `${pass === 2 ? "Segunda vuelta automática" : `Vuelta automática ${pass}/${CONFIG.videoExtraRounds + 1}`} para las escenas que fallaron (no costaron puntos): ${again.map(pad3).join(", ")}. Suavizo un poco más el prompt (misma escena y estilo). Empiezo en ${waitS} s.`);
+      await sleep(waitS * 1000);
       for (const n of again) {
         throwIfStopped();
         await setStep(n, "video", "pending", { error: null });
         await setStep(n, "download", "pending");
-        await processSceneVideo(n, cfg, maxWaitMs, 2);
+        await processSceneVideo(n, cfg, maxWaitMs, pass);
+      }
+      // Fallos TÉCNICOS (no se pudo adjuntar/enviar) tras la 2.ª vuelta: F5 ya
+      // (suele desatascar Flow), sin esperar a las demás vueltas. Máx. 2.
+      const techNow = batch.order.filter((n) => sceneRetryable(n, cfg) && batch.scenes[n].failKind === "tech");
+      if (techNow.length && (batch.autoReloads || 0) < 2) {
+        for (const n of techNow) { batch.scenes[n].video = "pending"; batch.scenes[n].download = "pending"; }
+        throw new ReloadError(`las escenas ${techNow.map(pad3).join(", ")} fallaron por un problema técnico (adjuntar/enviar)`);
       }
     }
     // Si aún quedan fallos TÉCNICOS (no se pudo adjuntar/enviar), se recarga
