@@ -248,6 +248,9 @@ function rerenderVideos() {
 }
 function finalizeVideo(wantName, label) {
   const t = addTile("flow-video-tile", "Animate " + uid(), `/media/${uid()}${label ? "-s" + label : ""}.mp4`);
+  // realTiles=1 (como Flow REAL, log v2.10: "sin identificador estable (seq)"): el tile no trae <video> ni
+  // ids, y al terminar cada vídeo Flow REDIBUJA la cuadrícula (todos los tiles son nodos nuevos).
+  if (P.get("realTiles")) { t.dataset.scene = label || ""; t.querySelector("video").remove(); setTimeout(rerenderVideos, 300); }
   if (P.get("wrongRename")) setTimeout(() => { t.querySelector(".footer-title").textContent = "mundofut_001_0000"; }, 1000);
   assets.unshift({ name: "Animate", kind: "Vídeo", tile: t });
   // SIM: el Agent renombra el vídeo si se lo piden (salvo noRename=1).
@@ -333,7 +336,7 @@ grid.addEventListener("contextmenu", (e) => {
       // SIM: Flow prepara el archivo y lo entrega como blob con un nombre suyo,
       // liberando la URL al instante (el caso más difícil para la extensión).
       setTimeout(async () => {
-        const sc = ((tile.querySelector("video") || { getAttribute: () => "" }).getAttribute("src") || "").match(/-s(\d{3})\.mp4$/);
+        const sc = ((tile.querySelector("video") || { getAttribute: () => "" }).getAttribute("src") || "").match(/-s(\d{3})\.mp4$/) || (tile.dataset.scene ? [0, tile.dataset.scene] : null);
         const r = await fetch("/video.mp4?res=" + encodeURIComponent(o.textContent) + (sc ? "&scene=" + sc[1] : ""));
         const url = URL.createObjectURL(await r.blob());
         const a = document.createElement("a"); a.href = url; a.download = `caricature_footballer_${uid()}.mp4`;

@@ -107,6 +107,12 @@ const SCENARIOS = {
     u2: "videoErrorTile=1", u3: "videoErrorTile=1",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 3, u3: 2 }, files: FILES, immediate: true },
   },
+  realtiles: {
+    desc: "PRUEBA REAL v2.10.2 (el mismo vídeo generado 4 veces): tiles SIN identificador estable, Flow redibuja la cuadrícula al terminar cada vídeo y queda el aviso de error de un fallo anterior → NUNCA se repite un vídeo que salió (1 aprobación por vídeo bueno)",
+    askWhereToSave: true, dest: "folder", timeoutMin: 9,
+    u2: "realTiles=1&videoErrorTile=1", u3: "realTiles=1&videoErrorTile=1",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 3, u3: 2 }, files: FILES, started: { u2: 3 } },
+  },
   alwaysretry: {
     desc: "v2.10.2 (el usuario: «que se generen siempre»): el vídeo de la escena 3 FALLA en Flow 8 veces seguidas DESPUÉS de aprobar el coste: no se da por perdido; en la 2.ª vuelta, suavizando más, sale",
     askWhereToSave: true, dest: "folder", timeoutMin: 9,
@@ -500,7 +506,7 @@ async function main() {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "voicestop2", "music", "musiconly", "videoerror", "busyagent", "alwaysretry", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "voicestop2", "music", "musiconly", "videoerror", "busyagent", "alwaysretry", "realtiles", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));

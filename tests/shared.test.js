@@ -312,8 +312,9 @@ test("pickMusicMedia: el archivo music… es la canción", () => {
 });
 
 test("tileLooksFailed: reconoce tarjetas de error de Flow y no los vídeos normales", () => {
-  for (const t of ["Error No se ha podido generar esta imagen. No se te ha cobrado", "Algo ha ido mal", "Something went wrong", "errorError al generar", "Se ha producido un error"]) assert.ok(S.tileLooksFailed(t), t);
-  for (const t of ["mundofut_001", "Animate a1b2", "007", "play_arrow 0:06 Terror en el estadio", ""]) assert.ok(!S.tileLooksFailed(t), t);
+  for (const t of ["Error No se ha podido generar esta imagen. No se te ha cobrado", "Algo ha ido mal", "errorAlgo ha ido mal. Inténtalo de nuevo", "Something went wrong", "Se ha producido un error"]) assert.ok(S.tileLooksFailed(t), t);
+  // Nunca por la palabra "error" suelta (icono oculto en un vídeo bueno): daría por fallido un vídeo que sí salió.
+  for (const t of ["mundofut_001", "Animate a1b2", "007", "play_arrow 0:06 Terror en el estadio", "error_outline mundofut_001", "error", ""]) assert.ok(!S.tileLooksFailed(t), t);
 });
 
 test("buildSoftenNote: intentos avanzados simplifican la acción pero mantienen estilo y 6 s", () => {

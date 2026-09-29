@@ -454,7 +454,9 @@ function buildVideoTileName(prefix, num, batchFolder) {
 // ¿El tile es una tarjeta de ERROR de Flow y no un resultado? [V] "No se ha
 // podido generar…"; el resto [SUPUESTO] (prueba real v2.10: errores en el vídeo).
 function tileLooksFailed(text) {
-  return /no se ha podido generar|no se te ha cobrado|algo (ha )?(ido|salido) mal|se ha producido un error|ha fallado|couldn.?t generate|something went wrong|generation failed|(^|[^a-záéíóúñ])error/i.test(String(text || ""));
+  // (v2.10.3: SIN la palabra suelta "error": un tile de vídeo bueno podría llevarla
+  // como icono oculto y se daría por fallido un vídeo que sí salió → se pagaría otra vez.)
+  return /no se ha podido generar|no se te ha cobrado|algo (ha )?(ido|salido) mal|se ha producido un error|couldn.?t generate|something went wrong|generation failed/i.test(String(text || ""));
 }
 function tileLooksInProgress(text) {
   return /\b\d{1,3}\s?%|generando|en cola|procesando|preparando/i.test(String(text || ""));
