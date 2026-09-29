@@ -1,6 +1,8 @@
 # Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.6.0)
 
 ## P0 — bloquea el uso real
+000000. **v2.9 voz en HeyGen real**: con la pestaña de HeyGen abierta y narración en el kit, ¿se escribe el guion, suena y aparece
+        `audio.mp3`? Si no: log (líneas [Voz]) + captura del panel de voz.
 00000. **v2.8 en real**: que se guarden los 8 vídeos, cada uno con su escena. Si falla, el log dice qué método se usó (menú / fuente
        directa) y si el tile tenía identificador estable ("Aviso técnico: …").
 0000. **v2.7 en real** (lote completo): (a) cada vídeo se guarda justo después de generarse ("Guardado: …mundofut_00N.mp4") y es

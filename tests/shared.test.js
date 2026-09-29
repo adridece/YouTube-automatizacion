@@ -247,3 +247,30 @@ test("buildDurationNote: remarca los 6 segundos", () => {
   assert.ok(S.buildDurationNote(6).includes("Duration: 6 seconds"));
   assert.ok(S.buildDurationNote(6, true).includes("ni uno más"));
 });
+
+test("extractNarration (v2.9): encabezado con bloque de código, y el kit sigue separando prompts", () => {
+  const sample = fs.readFileSync(path.join(__dirname, "..", "examples", "sample-kit.txt"), "utf8");
+  const kit = "## 🎙️ NARRACIÓN\n```\nEn 1998 un chico de barrio soñaba.\nNadie creía en él.\n```\n\n" + sample;
+  const r = S.extractNarration(kit);
+  assert.strictEqual(r.text, "En 1998 un chico de barrio soñaba.\nNadie creía en él.");
+  const p = S.splitCombinedPrompts(kit);
+  assert.strictEqual(p.images.size, 3);
+  assert.strictEqual(p.animations.size, 3);
+  assert.strictEqual(S.extractNarration(sample).text, "", "el kit de ejemplo no trae narración");
+});
+
+test("extractNarration: en línea, con marcadores por escena y etiquetas", () => {
+  assert.strictEqual(S.extractNarration("Narración: Hola, esto es la voz del short de hoy, que es largo.\n\n## PROMPTS DE IMAGEN\n[001] a").text, "Hola, esto es la voz del short de hoy, que es largo.");
+  const kit = "**Guion:**\n[001] — Hook: Nadie lo vio venir.\n[002] Nadie lo vio venir: fue increíble\n\n# PROMPTS DE IMAGEN\n[001] x\n[002] y\n# PROMPTS DE ANIMACIÓN\n[001] z\n[002] w";
+  assert.strictEqual(S.extractNarration(kit).text, "Nadie lo vio venir.\nNadie lo vio venir: fue increíble");
+  const p = S.splitCombinedPrompts(kit);
+  assert.strictEqual(p.images.get(1), "x");
+  assert.strictEqual(p.animations.get(2), "w");
+});
+
+test("audioExtFromMime", () => {
+  assert.strictEqual(S.audioExtFromMime("audio/mpeg"), "mp3");
+  assert.strictEqual(S.audioExtFromMime("audio/wav"), "wav");
+  assert.strictEqual(S.audioExtFromMime("", "https://x/y/a.m4a?sig=1"), "m4a");
+  assert.strictEqual(S.audioExtFromMime("", ""), "mp3");
+});

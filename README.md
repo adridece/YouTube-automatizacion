@@ -46,6 +46,10 @@ Desde la v2.7 **cada vídeo se descarga nada más generarse**, con su nombre (`m
 extensión sabe cuál es porque es el vídeo nuevo que acaba de aparecer (no depende de cómo lo llame el Agent). Lo que falle sin
 gastar puntos se reintenta solo al final (y, si es un fallo técnico, la extensión recarga Flow y sigue sola).
 
+**Voz (v2.9)**: si el kit trae la narración (encabezado «NARRACIÓN», «GUION» o «VOZ EN OFF»; o escrita en el panel → «Narración
+para la voz») y tienes abierta tu pestaña de HeyGen con la voz, la extensión borra el guion, escribe la narración, pulsa reproducir
+y guarda el audio nuevo como `audio.mp3` en la misma carpeta que los vídeos.
+
 ## Primera prueba de la v2 (en este orden; las dos primeras cuestan 0 puntos)
 1. Recarga la extensión (⟳) y pulsa F5 en tus pestañas de Flow. Abre la ventanita (icono de la extensión).
 2. Salida → **Elegir** → Escritorio (o crea `Escritorio/MundoFut`). Debe poner "· con permiso".

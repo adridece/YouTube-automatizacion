@@ -42,7 +42,12 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (28 sep 2026 — v2.8.0, "Cerezium Autopilot")
+## Estado actual (29 sep 2026 — v2.9.0, "Cerezium Autopilot")
+**Prueba real v2.8: la descarga de vídeos funciona** (probado con 1 vídeo). v2.9 añade la **voz de HeyGen**: narración del kit →
+pestaña de HeyGen → guion → reproducir → el audio nuevo (red, tipo Media) se guarda como `audio.mp3` en la carpeta del lote
+(`heygen.js` + `runVoice` en background, depurador Network). BUG_HISTORY #68, SIN VERIFICAR en HeyGen real. e2e: `voice`.
+
+### v2.8.0
 **Prueba real v2.7: TODO funcionó (imágenes, adjuntar, coste 10, aprobar, vídeos) salvo las descargas** (BUG_HISTORY #67: se tomaba
 un tile provisional por el vídeo terminado; Flow lo sustituye al terminar). v2.8: espera a que termine de verdad, re-busca el tile
 antes de cada intento, clave por contenido, y plan B de descarga directa de la fuente del vídeo. SIN VERIFICAR en real.
@@ -110,6 +115,7 @@ extension/            <- lo que se carga en Chrome (chrome://extensions -> Carga
   sidepanel.html/css/js  interfaz (panel lateral): kit, cuentas, salida, checklist, progreso, log
   offscreen.html/js   escribe los vídeos en la carpeta elegida (con fs-store.js: handle en IndexedDB)
   page-hook.js        (mundo de la página) retrasa URL.revokeObjectURL para poder leer el blob de la descarga
+  heygen.js           en app.heygen.com: escribe la narración en el guion y pulsa reproducir (voz → audio.mp3)
 docs/                 REQUIREMENTS, FLOW_DOM_FINDINGS, ARCHITECTURE, BUG_HISTORY, TODO, PROMPT_KIT_FORMAT
 tests/shared.test.js  tests de la lógica pura (node:test, sin dependencias)
 tests/e2e/            Chromium real + extensión + Flow SIMULADO (mock-flow.html); npm run e2e

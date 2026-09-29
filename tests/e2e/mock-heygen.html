@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>HeyGen (SIMULADO para pruebas)</title>
+<!--
+  Imitación MÍNIMA de la página de HeyGen del usuario (create-v4, panel de voz), con la estructura de los
+  selectores que dio (sin las clases css-xxxx). SIM: al pulsar reproducir, la página pide el audio a
+  /tts/<id>.mp3 y lo reproduce con un <audio> (lo que en DevTools sale como "Media").
+  El audio pesa 200000 + nº de caracteres del guion: así la prueba comprueba que es el del texto nuevo.
+-->
+<style>
+  body { margin: 0; font: 13px system-ui, sans-serif; background: #111; color: #ddd; }
+  .te-scriptpanel-redesign { padding: 12px; border: 1px solid #333; margin: 12px; }
+  [contenteditable] { min-height: 80px; background: #1b1b1b; padding: 8px; }
+  .tw-h-\[168px\] { height: 168px; border: 1px solid #333; margin: 12px; }
+  .play { width: 32px; height: 32px; background: #e8234b; border-radius: 50%; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="te-scriptpanel-redesign">
+    <div>Guion</div>
+    <div><div><div contenteditable="true" id="script"><p>Texto viejo que había antes en el guion.</p></div></div></div>
+  </div>
+  <div class="tw-h-[168px]">
+    <div class="tw-flex tw-w-full tw-flex-row tw-items-center tw-justify-between tw-border-b tw-border-line tw-pb-2">
+      <div class="tw-relative tw-flex tw-flex-row tw-items-center tw-gap-3">
+        <div><div class="play" id="play"></div></div>
+        <div>Voz: Mi voz</div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const P = new URLSearchParams(location.search);
+document.getElementById("play").addEventListener("click", async () => {
+  const text = document.getElementById("script").innerText.replace(/\s+/g, " ").trim();
+  sessionStorage.setItem("hgPlayed", String(+(sessionStorage.getItem("hgPlayed") || 0) + 1));
+  sessionStorage.setItem("hgText", text);
+  await new Promise((r) => setTimeout(r, +(P.get("ttsMs") || 1500))); // SIM: HeyGen genera la voz
+  const a = document.createElement("audio");
+  a.src = `/tts/${Math.random().toString(36).slice(2)}.mp3?chars=${text.length}`;
+  document.body.appendChild(a);
+  a.play().catch(() => {});
+});
+</script>
+</body>
+</html>

@@ -42,6 +42,7 @@ function trimTrailingJunk(text) {
  * vacío y todo se coloca en `images`.
  */
 function splitCombinedPrompts(raw) {
+  raw = extractNarration(raw).rest; // la narración (voz) no son prompts
   const markerRe = /\[(\d{1,3})\]/g;
   const markers = [];
   let m;
@@ -404,7 +405,7 @@ function prepareResume(state) {
 
 // --- Log ----------------------------------------------------------------
 
-const PHASE_LABELS = { images: "Imágenes", videos: "Vídeo", downloads: "Descarga", setup: "Inicio", plan: "Plan", run: "Lote" };
+const PHASE_LABELS = { images: "Imágenes", videos: "Vídeo", downloads: "Descarga", setup: "Inicio", plan: "Plan", run: "Lote", voice: "Voz" };
 const LEVEL_LABELS = { info: "INFO", ok: "OK", warn: "AVISO", error: "ERROR" };
 
 function formatLogTime(t) {
@@ -489,4 +490,57 @@ function imageTitleMatches(title, label) {
 function buildDurationNote(seconds, strong) {
   const base = `IMPORTANTE: genera UN solo vídeo de EXACTAMENTE ${seconds} segundos (Duration: ${seconds} seconds). No uses otra duración.`;
   return strong ? `${base} El intento anterior salió con una duración mayor y costaba más de 10 puntos: debe durar ${seconds} segundos, ni uno más.` : base;
+}
+
+// --- Narración (voz de HeyGen, v2.9) -----------------------------------
+// El kit puede traer, además de los prompts, el texto de la narración bajo un
+// encabezado ("## 🎙️ NARRACIÓN", "**Guion:**", "VOZ EN OFF", "Narración: …").
+// Devuelve { text, rest }: el texto de la narración (sin marcadores [001] ni
+// ```) y el kit SIN esa sección (para que no se confunda con los prompts).
+const NARRATION_WORD_RE = /(narraci[oó]n|gui[oó]n|voz en off|voice[\s-]?over|locuci[oó]n|texto (?:de|para) (?:la )?voz)/i;
+function isHeadingLine(line) {
+  const t = String(line || "").trim();
+  if (!t || t.length > 80 || /^```/.test(t) || /^\[\d{1,3}\]/.test(t)) return false;
+  if (/^#{1,6}\s/.test(t)) return true;
+  if (/^\*\*[^*]+\*\*:?$/.test(t)) return true;
+  const letters = t.replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ]/g, "");
+  return letters.length >= 4 && letters === letters.toUpperCase();
+}
+function extractNarration(raw) {
+  const src = String(raw || "");
+  const lines = src.split(/\r?\n/);
+  let start = -1;
+  let inline = "";
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/prompt/i.test(l) || !NARRATION_WORD_RE.test(l)) continue;
+    const m = l.match(/^\s*(?:#{1,6}\s*)?(?:[^\wÁÉÍÓÚÑáéíóúñ\[]{0,6}\s*)?(?:\*\*)?[^:\n]{0,40}?(?:narraci[oó]n|gui[oó]n|voz en off|voice[\s-]?over|locuci[oó]n|texto (?:de|para) (?:la )?voz)[^:\n]{0,30}?(?:\*\*)?\s*[:：]\s*(.+)$/i);
+    if (m && m[1].replace(/\*\*/g, "").trim().length > 0 && l.length > 40) { start = i; inline = m[1].replace(/\*\*/g, "").trim(); break; }
+    if (isHeadingLine(l)) { start = i; break; }
+  }
+  if (start < 0) return { text: "", rest: src };
+  let end = lines.length;
+  for (let j = start + 1; j < lines.length; j++) {
+    if (isHeadingLine(lines[j])) { end = j; break; }
+  }
+  const body = [inline, ...lines.slice(start + 1, end)]
+    .filter((l) => !/^\s*```/.test(l))
+    .map((l) => l.replace(/^\s*\[\d{1,3}\]\s*/, "")
+      .replace(/^[—–-]\s*/, "")
+      .replace(/^(?:⭐\s*)?(?:hook|gancho|intro|introducci[oó]n|escena\s*\d+|cierre|cta|portada|remate|final)\s*[—–:-]\s*/i, "")
+      .trim());
+  const text = body.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  const rest = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
+  return { text, rest };
+}
+// Extensión del archivo de voz según su tipo (el usuario lo quiere como audio.mp3).
+function audioExtFromMime(mime, url) {
+  const m = String(mime || "").toLowerCase();
+  if (/mpeg|mp3/.test(m)) return "mp3";
+  if (/wav/.test(m)) return "wav";
+  if (/mp4|m4a|aac/.test(m)) return "m4a";
+  if (/ogg|opus/.test(m)) return "ogg";
+  if (/webm/.test(m)) return "webm";
+  const u = String(url || "").toLowerCase().match(/\.(mp3|wav|m4a|aac|ogg|opus|webm)(\?|$)/);
+  return u ? (u[1] === "aac" ? "m4a" : u[1] === "opus" ? "ogg" : u[1]) : "mp3";
 }

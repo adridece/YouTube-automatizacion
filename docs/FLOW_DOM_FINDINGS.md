@@ -130,3 +130,11 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 
 ## Entorno de herramientas
 - Claude in Chrome no puede navegar a `chrome://extensions` (permiso denegado) y no puede escribir contraseñas por el usuario.
+
+## HeyGen (voz, v2.9) — lo que dio el usuario el 29 sep 2026 [SIN VERIFICAR por la extensión]
+- Proyecto: `https://app.heygen.com/create-v4/<id>?vt=l&panel=scene&subPanel=voice`.
+- Guion (puede traer texto previo: hay que borrarlo): `… div.css-ltmzi1.te-scriptpanel-redesign.tw-relative > div:nth-child(2) > div > div`.
+  La extensión usa `.te-scriptpanel-redesign [contenteditable="true"]` y la ruta sin las clases `css-xxxx` (cambian con cada versión).
+- Botón reproducir: `… div.tw-h-[168px] > div.tw-flex.tw-w-full.tw-flex-row.tw-items-center.tw-justify-between.tw-border-b.tw-border-line.tw-pb-2
+  > div.tw-relative.tw-flex.tw-flex-row.tw-items-center.tw-gap-3 > div:nth-child(1) > div`.
+- Al reproducir aparece una petición nueva de tipo **Media** en la red: ese es el audio que se guarda (audio.mp3).
