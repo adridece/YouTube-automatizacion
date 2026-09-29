@@ -33,6 +33,8 @@ const EXT_ID = [...crypto.createHash("sha256").update(EXT).digest("hex").slice(0
 
 const SCEN = {
   voicebg: { voice: true, arm: true, desc: "VOZ con la pestaña de HeyGen OCULTA (el usuario en otra) y PREPARADA (cereza): HeyGen solo reacciona con fotogramas y la voz sale al parar" },
+  musicbg: { music: true, arm: true, desc: "MÚSICA con la pestaña de Mureka OCULTA y PREPARADA (cereza): Mureka solo reacciona con fotogramas; generar UNA vez, Library, play → musica.mp3" },
+  musicbgnoarm: { music: true, arm: false, desc: "MÚSICA con Mureka OCULTA y SIN preparar: el modo «despierto» (page-hook) debe bastar" },
   voicebgnoarm: { voice: true, arm: false, desc: "VOZ con HeyGen OCULTA y SIN preparar: el modo «despierto» (page-hook) debe bastar para que reproduzca" },
   normal: { desc: "Flow en pestañas de fondo; el usuario en otra pestaña", u2: "", u3: "", range: ["1-2", "3"], expectPlanB: false },
   raf: { desc: 'Fondo + la lista del "+" solo se pinta con fotogramas (rAF): el modo "despierto" la hace pintarse', u2: "rafList=1", u3: "rafList=1", range: ["1-2", "3"], expectPlusMenu: true },
@@ -70,7 +72,7 @@ async function run(name, sc) {
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--disable-features=DisableLoadExtensionCommandLineSwitch",
     // Simula el clic del usuario en la cereza (permiso de captura) — solo para pruebas.
     ...(sc.arm ? [`--allowlisted-extension-id=${EXT_ID}`] : []),
-    "--remote-debugging-port=9336", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443, MAP resource2.heygen.ai 127.0.0.1:8443", "--ignore-certificate-errors",
+    "--remote-debugging-port=9336", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443, MAP resource2.heygen.ai 127.0.0.1:8443, MAP www.mureka.ai 127.0.0.1:8443, MAP cdn.mureka.ai 127.0.0.1:8443", "--ignore-certificate-errors",
     "--no-proxy-server", "--window-size=1300,900", "about:blank",
   ], { stdio: "ignore" });
   try {
@@ -164,7 +166,7 @@ async function runVoiceBg(name, sc) {
     `--user-data-dir=${prof}`, "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--disable-features=DisableLoadExtensionCommandLineSwitch",
     ...(sc.arm ? [`--allowlisted-extension-id=${EXT_ID}`] : []),
-    "--remote-debugging-port=9336", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443, MAP resource2.heygen.ai 127.0.0.1:8443", "--ignore-certificate-errors",
+    "--remote-debugging-port=9336", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443, MAP resource2.heygen.ai 127.0.0.1:8443, MAP www.mureka.ai 127.0.0.1:8443, MAP cdn.mureka.ai 127.0.0.1:8443", "--ignore-certificate-errors",
     "--no-proxy-server", "--window-size=1300,900", "about:blank",
   ], { stdio: "ignore" });
   try {
@@ -227,6 +229,81 @@ async function runVoiceBg(name, sc) {
   return results;
 }
 
+async function runMusicBg(name, sc) {
+  console.log(`\n=== Segundo plano "${name}": ${sc.desc}`);
+  const results = [];
+  const check = (label, ok, detail) => { results.push(ok); console.log(`  ${ok ? "✅" : "❌"} ${label}${detail ? " — " + detail : ""}`); };
+  const prof = path.join(TMP, `profile-bg-${name}`);
+  fs.rmSync(prof, { recursive: true, force: true });
+  fs.mkdirSync(path.join(prof, "Default"), { recursive: true });
+  const chrome = spawn(CHROME, [
+    `--user-data-dir=${prof}`, "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required",
+    `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--disable-features=DisableLoadExtensionCommandLineSwitch",
+    ...(sc.arm ? [`--allowlisted-extension-id=${EXT_ID}`] : []),
+    "--remote-debugging-port=9336", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443, MAP resource2.heygen.ai 127.0.0.1:8443, MAP www.mureka.ai 127.0.0.1:8443, MAP cdn.mureka.ai 127.0.0.1:8443", "--ignore-certificate-errors",
+    "--no-proxy-server", "--window-size=1300,900", "about:blank",
+  ], { stdio: "ignore" });
+  try {
+    let ver;
+    for (let i = 0; i < 60 && !ver; i++) { try { ver = await getJson("http://127.0.0.1:9336/json/version"); } catch (e) { await sleep(250); } }
+    const cdp = await Cdp.connect(ver.webSocketDebuggerUrl);
+    const { targetId } = await cdp.send("Target.createTarget", { url: `chrome-extension://${EXT_ID}/sidepanel.html` });
+    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    const ev = async (expr) => {
+      const r = await cdp.send("Runtime.evaluate", { expression: `(async () => { ${expr} })()`, awaitPromise: true, returnByValue: true }, sessionId);
+      if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception ? r.exceptionDetails.exception.description : r.exceptionDetails.text);
+      return r.result.value;
+    };
+    await sleep(1500);
+    await ev(`const root = await navigator.storage.getDirectory(); await fbrSetRootHandle(await root.getDirectoryHandle("Escritorio", { create: true })); location.reload();`).catch(() => {});
+    await sleep(1500);
+    await ev(`await chrome.tabs.create({ url: "https://www.mureka.ai/create?needsFrames=1", active: false });`);
+    await sleep(3000);
+    const tabQ = `const [t] = await chrome.tabs.query({ url: "https://www.mureka.ai/*" });`;
+    const vis0 = await ev(`${tabQ} const r = await chrome.scripting.executeScript({ target: { tabId: t.id }, func: () => document.visibilityState }); return r[0].result;`);
+    if (sc.arm) {
+      const r = await ev(`${tabQ} return await chrome.runtime.sendMessage({ type: "ARM_TAB", tabId: t.id });`);
+      console.log("  preparar Mureka:", JSON.stringify(r));
+      await sleep(1000);
+    }
+    const prompt = "Dark cinematic trap beat for a football short, 90 bpm";
+    await ev(`
+      const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); };
+      set("prompts", ""); set("narration", ""); set("music", ${JSON.stringify(prompt)});
+      document.querySelector('input[name=dest][value=folder]').checked = true;
+      const gm = document.getElementById("genMode"); gm.value = "paired"; gm.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 800));
+      document.getElementById("start").click();
+      await new Promise((r) => setTimeout(r, 600));
+      if (!document.getElementById("startMsg").hidden) document.getElementById("start").click();`);
+    const t0 = Date.now();
+    let ms = {};
+    let muActive = false;
+    while (Date.now() - t0 < 5 * 60000) {
+      await sleep(2000);
+      const st = await ev(`const d = await chrome.storage.local.get("fbrMusic"); const act = await chrome.tabs.query({ active: true }); return { v: d.fbrMusic || {}, act: act.map((t) => t.url) };`);
+      ms = st.v;
+      if (st.act.some((u) => u.includes("mureka"))) muActive = true;
+      if (ms.status === "done" || ms.status === "error") break;
+    }
+    const log = await ev(`return (await chrome.storage.local.get("fbrLog")).fbrLog.map((e) => formatLogEntry(e)).join("\\n");`);
+    fs.writeFileSync(path.join(OUT, `log-bg-${name}.txt`), log + "\n");
+    const mu = await ev(`${tabQ} const r = await chrome.scripting.executeScript({ target: { tabId: t.id }, func: () => ({ gen: +(localStorage.getItem("muGenerated") || 0), played: +(localStorage.getItem("muPlayed") || 0), playedId: localStorage.getItem("muPlayedId") || "" }) }); return r[0].result;`);
+    const folder = (log.match(/Carpeta del lote: (\S+)/) || [])[1];
+    const files = await ev(`const out = {}; try { const root = await navigator.storage.getDirectory(); const d = await (await root.getDirectoryHandle("Escritorio")).getDirectoryHandle(${JSON.stringify(folder || "x")}); for await (const [n, h] of d.entries()) out[n] = (await h.getFile()).size; } catch (e) {} return out;`);
+    console.log(`  (${Math.round((Date.now() - t0) / 1000)} s · log en tests/e2e/.out/log-bg-${name}.txt)`);
+    check("la pestaña de Mureka estaba OCULTA al empezar", vis0 === "hidden", vis0);
+    check("nunca se cambió la vista a Mureka", !muActive);
+    check("generar pulsado UNA vez; play en la canción NUEVA", mu.gen === 1 && /^new1/.test(mu.playedId), `generar=${mu.gen} play=${mu.played} (${mu.playedId})`);
+    check("el panel dice «Música guardada» con el archivo", ms.status === "done" && /musica\.mp3$/.test(ms.file || ""), `${ms.status} · ${ms.msg} · ${ms.file || ""}`);
+    check("musica.mp3 guardado y es la canción nueva", files["musica.mp3"] === 400000 + prompt.length, JSON.stringify(files));
+  } finally {
+    chrome.kill();
+    await sleep(800);
+  }
+  return results;
+}
+
 (async () => {
   const key = path.join(TMP, "key.pem"), cert = path.join(TMP, "cert.pem");
   if (!fs.existsSync(cert)) execSync(`openssl req -x509 -newkey rsa:2048 -nodes -keyout ${key} -out ${cert} -days 30 -subj /CN=flow.google.com 2>/dev/null`);
@@ -248,6 +325,15 @@ async function runVoiceBg(name, sc) {
       const m = req.url.match(/^\/v1\/voice\?id=[0-9a-f-]+&chars=(\d+)/);
       if (m) return sendRange(Buffer.alloc(200000 + parseInt(m[1], 10), 9), "audio/mpeg");
       res.statusCode = 404; return res.end();
+    }
+    if (host.startsWith("cdn.mureka.ai")) {
+      const m = req.url.match(/\/music_[a-z0-9]+\.mp3\?len=(\d+)/);
+      if (m) return sendRange(Buffer.alloc(400000 + parseInt(m[1], 10), 5), "audio/mpeg");
+      res.statusCode = 404; return res.end();
+    }
+    if (host.startsWith("www.mureka.ai")) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.end(fs.readFileSync(path.join(__dirname, "mock-mureka.html")));
     }
     if (host.startsWith("app.heygen.com")) {
       if (req.url.startsWith("/ui/")) return sendRange(Buffer.alloc(6000, 3), "video/webm");
@@ -272,7 +358,7 @@ async function runVoiceBg(name, sc) {
   }).listen(8443);
   const all = [];
   try {
-    for (const n of (process.env.FBR_BG || "trusted,capture,normal,raf,stall,retry,pm,sendenter,voicebg,voicebgnoarm").split(",")) all.push(...(await (SCEN[n].voice ? runVoiceBg(n, SCEN[n]) : run(n, SCEN[n]))));
+    for (const n of (process.env.FBR_BG || "trusted,capture,normal,raf,stall,retry,pm,sendenter,voicebg,voicebgnoarm,musicbg,musicbgnoarm").split(",")) all.push(...(await (SCEN[n].music ? runMusicBg(n, SCEN[n]) : SCEN[n].voice ? runVoiceBg(n, SCEN[n]) : run(n, SCEN[n]))));
   } finally {
     server.close();
   }

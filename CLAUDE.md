@@ -42,7 +42,10 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (29 sep 2026 — v2.9.1, "Cerezium Autopilot")
+## Estado actual (29 sep 2026 — v2.10.0, "Cerezium Autopilot")
+v2.10: **música de Mureka** (`mureka.js` + `runMusic`): prompt → generar UNA vez → Library → play → archivo «music…» de la red →
+`musica.mp3` en la carpeta del lote (BUG_HISTORY #77, SIN VERIFICAR en Mureka real). e2e: `music`, `musiconly`; e2e:bg `musicbg`.
+
 v2.9.1: el panel ya no bloquea si el kit no trae todo: hace solo imágenes, solo vídeos o **solo la voz** según lo que haya
 (BUG_HISTORY #69).
 
@@ -104,6 +107,7 @@ sin foco → v2.4: rotación de formas de escribir/enviar. **Prueba real v2.4.0*
 - **HeyGen: pulsar reproducir UNA sola vez por lote** (máx. 3 previsualizaciones al día): nunca reintentar el clic. A los 10 s se pulsa
   el mismo botón UNA vez para parar (así sale la voz en la red; parar no gasta). Sin recargar. HeyGen se prepara para
   segundo plano igual que Flow (cereza en su pestaña, depurador, page-hook): prueba con `npm run e2e:bg` (`voicebg`).
+- **Mureka: pulsar generar UNA sola vez por lote** (gasta créditos): nunca reintentar ese clic. El play en Library sí se puede repetir.
 - **Todo fallo que no cuesta puntos se reintenta solo** (segunda vuelta, F5 automático): el usuario no quiere resolver nada a mano.
 - **Descargas de una en una** para toda la extensión, asociadas a su escena en `background.js`; se comprueba el nombre final.
 - Las esperas usan `waitFor` (despierta con el DOM y con el latido del background): no uses `setInterval`/`sleep` fijos para esperar a Flow.
@@ -122,6 +126,7 @@ extension/            <- lo que se carga en Chrome (chrome://extensions -> Carga
   offscreen.html/js   escribe los vídeos en la carpeta elegida (con fs-store.js: handle en IndexedDB)
   page-hook.js        (mundo de la página) retrasa URL.revokeObjectURL para poder leer el blob de la descarga
   heygen.js           en app.heygen.com: escribe la narración en el guion y pulsa reproducir (voz → audio.mp3)
+  mureka.js           en www.mureka.ai: escribe el prompt de música, genera, Library → play (música → musica.mp3)
 docs/                 REQUIREMENTS, FLOW_DOM_FINDINGS, ARCHITECTURE, BUG_HISTORY, TODO, PROMPT_KIT_FORMAT
 tests/shared.test.js  tests de la lógica pura (node:test, sin dependencias)
 tests/e2e/            Chromium real + extensión + Flow SIMULADO (mock-flow.html); npm run e2e

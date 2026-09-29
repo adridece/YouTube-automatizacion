@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Cerezium Autopilot — Google Flow",
-  "version": "2.9.8",
+  "version": "2.10.0",
   "description": "Cerezium Autopilot: tus Shorts en piloto automático en Google Flow. Genera las imágenes, anima cada escena y guarda los vídeos numerados en una carpeta nueva por lote.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -26,7 +26,9 @@
     "https://storage.googleapis.com/*",
     "https://app.heygen.com/*",
     "https://*.heygen.com/*",
-    "https://*.heygen.ai/*"
+    "https://*.heygen.ai/*",
+    "https://www.mureka.ai/*",
+    "https://*.mureka.ai/*"
   ],
   "icons": {
     "16": "icons/icon-16.png",
@@ -48,7 +50,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://app.heygen.com/*"
+        "https://app.heygen.com/*",
+        "https://www.mureka.ai/*"
       ],
       "js": [
         "page-hook.js"
@@ -84,6 +87,15 @@
       ],
       "js": [
         "heygen.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.mureka.ai/*"
+      ],
+      "js": [
+        "mureka.js"
       ],
       "run_at": "document_idle"
     }

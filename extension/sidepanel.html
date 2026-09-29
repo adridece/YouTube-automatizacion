@@ -41,6 +41,12 @@
         <textarea id="narration" spellcheck="false" style="min-height:90px" placeholder="Opcional: si el kit ya trae la narración (encabezado «NARRACIÓN», «GUION» o «VOZ EN OFF»), se usa sola. Si escribes aquí, se usa esto."></textarea>
         <p class="hint">Con narración y una pestaña de HeyGen abierta (tu proyecto con la voz), la extensión escribe el texto en el guion, pulsa reproducir y guarda el audio como <b>audio.mp3</b> en la carpeta del lote.</p>
       </details>
+      <details class="adv" style="margin-top:8px">
+        <summary>Prompt de música (Mureka)</summary>
+        <label for="music" class="sr">Prompt de música</label>
+        <textarea id="music" spellcheck="false" style="min-height:70px" placeholder="Opcional: si el kit ya trae el prompt de música (encabezado «MÚSICA» o «PROMPT DE MÚSICA»), se usa solo. Si escribes aquí, se usa esto."></textarea>
+        <p class="hint">Con prompt de música y una pestaña de Mureka abierta (www.mureka.ai/create, con tu sesión), la extensión escribe el prompt, pulsa generar UNA vez, espera a que la canción salga en Library, le da al play y la guarda como <b>musica.mp3</b> en la carpeta del lote.</p>
+      </details>
     </section>
 
     <section class="card">
@@ -123,7 +129,7 @@
             <option value="paired">Imágenes → vídeos → descargar (normal)</option>
             <option value="animationsOnly">Solo vídeos (las imágenes ya existen)</option>
             <option value="imagesOnly">Solo imágenes (y descargarlas)</option>
-            <option value="voiceOnly">Solo la voz (HeyGen → audio.mp3)</option>
+            <option value="voiceOnly">Solo audio: voz (HeyGen) y/o música (Mureka)</option>
             <option value="dryRun">ENSAYO sin gastar: llega al aviso de coste y pulsa Rechazar</option>
             <option value="downloadTest">PRUEBA de descarga: vídeos que ya existen (0 puntos)</option>
             <option value="sendTest">PRUEBA de envío: comprueba que Flow acepta mensajes sin mirarlo (0 puntos)</option>

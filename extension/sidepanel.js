@@ -83,7 +83,7 @@ TABS.forEach((t, i) => {
 
 // ------------------------------------------------------------ FORMULARIO
 const FORM_KEY = "fbrForm";
-const FIELDS = ["prompts", "narration", "accA_on", "accA_num", "accA_range", "accA_res", "accB_on", "accB_num", "accB_range", "accB_res", "nameFormat", "prefix", "genMode", "maxWait", "maxRetries", "autoRun"];
+const FIELDS = ["prompts", "narration", "music", "accA_on", "accA_num", "accA_range", "accA_res", "accB_on", "accB_num", "accB_range", "accB_res", "nameFormat", "prefix", "genMode", "maxWait", "maxRetries", "autoRun"];
 function radio(name) { const r = document.querySelector(`input[name="${name}"]:checked`); return r ? r.value : null; }
 function setRadio(name, v) { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; }
 
@@ -133,9 +133,9 @@ async function refreshArmed() {
 // para trabajar en segundo plano (Chrome solo lo permite tras pulsar la cereza en ella).
 async function armActiveFlowTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google|app\.heygen\.com)\//.test(tab.url || "")) return;
+  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google|app\.heygen\.com|www\.mureka\.ai)\//.test(tab.url || "")) return;
   const r = await chrome.runtime.sendMessage({ type: "ARM_TAB", tabId: tab.id }).catch(() => null);
-  if (r && r.ok && !r.already) toast(r.acc === "heygen" ? "Pestaña de HeyGen lista: la voz se hará aunque mires otra pestaña" : `Pestaña ${r.acc.replace("u", "/u/")}/ lista: seguirá trabajando aunque mires otra`);
+  if (r && r.ok && !r.already) toast(r.acc === "heygen" ? "Pestaña de HeyGen lista: la voz se hará aunque mires otra pestaña" : r.acc === "mureka" ? "Pestaña de Mureka lista: la música se hará aunque mires otra pestaña" : `Pestaña ${r.acc.replace("u", "/u/")}/ lista: seguirá trabajando aunque mires otra`);
   else if (r && !r.ok && r.error) toast(`No pude preparar esta pestaña: ${r.error}`);
   await refreshArmed();
 }
@@ -152,22 +152,26 @@ chrome.tabs.onRemoved.addListener(refreshTabs);
 // Qué se hace de verdad según lo que trae el kit (v2.9.1): con el modo normal,
 // si solo hay imágenes → solo imágenes; si solo hay animaciones → solo vídeos;
 // si solo hay narración → solo la voz. Así nunca bloquea por lo que falta.
-function effectiveMode(f, images, animations, narration) {
+function effectiveMode(f, images, animations, narration, music) {
   const m = f.genMode;
   if (m !== "paired") return m;
-  if (!images.size && !animations.size) return narration ? "voiceOnly" : m;
+  if (!images.size && !animations.size) return narration || music ? "voiceOnly" : m;
   if (images.size && !animations.size) return "imagesOnly";
   if (!images.size && animations.size) return "animationsOnly";
   return m;
 }
-const MODE_TEXT = { paired: "imágenes → vídeos", imagesOnly: "solo imágenes", animationsOnly: "solo vídeos (imágenes ya hechas)", voiceOnly: "solo la voz", dryRun: "ensayo", downloadTest: "prueba de descarga", sendTest: "prueba de envío" };
+const MODE_TEXT = { paired: "imágenes → vídeos", imagesOnly: "solo imágenes", animationsOnly: "solo vídeos (imágenes ya hechas)", voiceOnly: "solo audio (voz/música)", dryRun: "ensayo", downloadTest: "prueba de descarga", sendTest: "prueba de envío" };
 
 // Narración para la voz: el campo propio o, si está vacío, la del kit.
 function narrationOf(f) { return (f.narration || "").trim() || extractNarration(f.prompts || "").text; }
+function musicOf(f) { return (f.music || "").trim() || extractMusic(f.prompts || "").text; }
 let heygenTab = null;
+let murekaTab = null;
 async function refreshHeygen() {
   const t = await chrome.tabs.query({ url: "https://app.heygen.com/*" }).catch(() => []);
   heygenTab = t.find((x) => /\/create/.test(x.url || "")) || t[0] || null;
+  const m = await chrome.tabs.query({ url: "https://www.mureka.ai/*" }).catch(() => []);
+  murekaTab = m.find((x) => /\/create/.test(x.url || "")) || m[0] || null;
 }
 function refreshDerived() {
   const f = readForm();
@@ -184,9 +188,14 @@ function refreshDerived() {
   const narr = narrationOf(f);
   const hgArmed = !!(heygenTab && armedTabs[heygenTab.id]);
   if (narr) chips.push(`<span class="${heygenTab && hgArmed ? "ok" : "warn"}">${icon(heygenTab && hgArmed ? "check" : "alert", 13)}voz: ${narr.split(/\s+/).length} palabras${!heygenTab ? " · abre HeyGen" : hgArmed ? " · HeyGen listo (2.º plano)" : " · pulsa 🍒 en la pestaña de HeyGen"}</span>`);
-  if (images.size || animations.size || narr) {
-    const em = effectiveMode(f, images, animations, narr);
-    chips.push(`<span>${icon("arrow", 13)}se hará: ${MODE_TEXT[em] || em}${narr && em !== "voiceOnly" && heygenTab && !["dryRun", "downloadTest", "sendTest"].includes(em) ? " + voz" : ""}</span>`);
+  const mus = musicOf(f);
+  const muArmed = !!(murekaTab && armedTabs[murekaTab.id]);
+  if (mus) chips.push(`<span class="${murekaTab && muArmed ? "ok" : "warn"}">${icon(murekaTab && muArmed ? "check" : "alert", 13)}música: ${mus.split(/\s+/).length} palabras${!murekaTab ? " · abre Mureka" : muArmed ? " · Mureka listo (2.º plano)" : " · pulsa 🍒 en la pestaña de Mureka"}</span>`);
+  if (images.size || animations.size || narr || mus) {
+    const em = effectiveMode(f, images, animations, narr, mus);
+    const extra = ["dryRun", "downloadTest", "sendTest"].includes(em) ? "" : [em !== "voiceOnly" && narr && heygenTab ? "voz" : "", em !== "voiceOnly" && mus && murekaTab ? "música" : ""].filter(Boolean).map((x) => " + " + x).join("");
+    const detail = em === "voiceOnly" ? [narr && heygenTab ? "voz" : "", mus && murekaTab ? "música" : ""].filter(Boolean).join(" y ") : "";
+    chips.push(`<span>${icon("arrow", 13)}se hará: ${em === "voiceOnly" && detail ? "solo " + detail : MODE_TEXT[em] || em}${extra}</span>`);
   }
   $("kitSummary").innerHTML = chips.join("");
 
@@ -325,17 +334,20 @@ $("start").addEventListener("click", async () => {
   const { images, animations } = splitCombinedPrompts(f.prompts);
   await refreshHeygen();
   const narration = narrationOf(f);
-  const mode = effectiveMode(f, images, animations, narration);
+  const music = musicOf(f);
+  const mode = effectiveMode(f, images, animations, narration, music);
   const voiceOnly = mode === "voiceOnly";
   const accs = voiceOnly ? [] : accounts(f);
   const problems = [];
   const needsImages = ["paired", "imagesOnly"].includes(mode);
   const needsAnims = ["paired", "animationsOnly", "dryRun"].includes(mode);
   if (voiceOnly) {
-    if (!narration) problems.push("No hay narración: pégala en el kit (encabezado «NARRACIÓN») o en «Narración para la voz».");
-    if (!heygenTab) problems.push("Para la voz hace falta tener abierta tu pestaña de HeyGen (proyecto con el panel de voz).");
+    const canVoice = narration && heygenTab;
+    const canMusic = music && murekaTab;
+    if (!narration && !music) problems.push("No hay narración ni prompt de música: pégalos en el kit (encabezados «NARRACIÓN» / «MÚSICA») o en sus campos.");
+    else if (!canVoice && !canMusic) problems.push(`${narration && !heygenTab ? "Para la voz hace falta tener abierta tu pestaña de HeyGen. " : ""}${music && !murekaTab ? "Para la música hace falta tener abierta www.mureka.ai/create." : ""}`.trim());
   } else {
-    if (!images.size && !animations.size && !narration) problems.push("El kit está vacío: pega los prompts y/o la narración.");
+    if (!images.size && !animations.size && !narration && !music) problems.push("El kit está vacío: pega los prompts, la narración y/o la música.");
     if (needsImages && !images.size) problems.push("No encuentro ningún prompt de imagen en el kit.");
     if (!accs.length) problems.push("Activa al menos una cuenta.");
     for (const a of accs) {
@@ -349,6 +361,9 @@ $("start").addEventListener("click", async () => {
   const notArmed = accs.filter((a) => { const t = flowTabs.find((x) => getFlowAccountKey(x.url) === a.accountKey); return !t || !armedTabs[t.id]; });
   const warns = [];
   if (notArmed.length) warns.push(`Sin preparar para segundo plano: ${notArmed.map((a) => a.accountKey.replace("u", "/u/") + "/").join(", ")}. Entra en esa pestaña y pulsa la cereza una vez; si no, Flow puede pararse cuando no la mires.`);
+  if (music && murekaTab && !armedTabs[murekaTab.id]) warns.push("La pestaña de Mureka no está preparada para segundo plano: entra en ella y pulsa la cereza una vez; si no, puede que no genere o no reproduzca la música cuando no la mires.");
+  if (music && !murekaTab) warns.push("Hay prompt de música pero no hay ninguna pestaña de Mureka abierta: NO se generará la música. Abre www.mureka.ai/create si la quieres.");
+  if (voiceOnly && narration && !heygenTab) warns.push("Hay narración pero no hay pestaña de HeyGen: solo se hará la música.");
   if (narration && heygenTab && !armedTabs[heygenTab.id]) warns.push("La pestaña de HeyGen no está preparada para segundo plano: entra en ella y pulsa la cereza una vez (como en Flow); si no, puede que la voz no se reproduzca cuando no la mires.");
   if (!voiceOnly && narration && !heygenTab) warns.push("Hay narración pero no hay ninguna pestaña de HeyGen abierta: NO se generará la voz (audio.mp3). Abre tu proyecto de HeyGen si la quieres.");
   if (warns.length && !startAnyway) {
@@ -381,11 +396,13 @@ $("start").addEventListener("click", async () => {
     },
   }));
   await saveForm();
-  const voice = narration && heygenTab && !["dryRun", "downloadTest", "sendTest"].includes(mode) ? { text: narration, batchFolder, destMode: f.dest } : null;
-  await chrome.runtime.sendMessage({ type: "RUN_PLAN", plan: { parallel: f.runMode !== "sequential", steps, voice } });
-  if (voiceOnly) toast("Generando solo la voz en HeyGen");
+  const noAudio = ["dryRun", "downloadTest", "sendTest"].includes(mode);
+  const voice = narration && heygenTab && !noAudio ? { text: narration, batchFolder, destMode: f.dest } : null;
+  const musicPlan = music && murekaTab && !noAudio ? { prompt: music, batchFolder, destMode: f.dest } : null;
+  await chrome.runtime.sendMessage({ type: "RUN_PLAN", plan: { parallel: f.runMode !== "sequential", steps, voice, music: musicPlan } });
+  if (voiceOnly) toast(`Generando solo ${[voice ? "la voz" : "", musicPlan ? "la música" : ""].filter(Boolean).join(" y ")}`);
   else if (unchecked.length) toast(`Lanzado (${MODE_TEXT[mode] || mode}). Ojo: ${unchecked.length} punto(s) del checklist sin marcar.`);
-  else toast(`Lote lanzado (${MODE_TEXT[mode] || mode}${voice ? " + voz" : ""})`);
+  else toast(`Lote lanzado (${MODE_TEXT[mode] || mode}${voice ? " + voz" : ""}${musicPlan ? " + música" : ""})`);
   showTab("progreso");
 });
 
@@ -428,14 +445,15 @@ const STATUS_LABEL = { pending: "pendiente", running: "en curso", done: "hecho",
 const PHASE_TEXT = { images: "Generando imágenes", videos: "Generando vídeos", downloads: "Descargando", done: "Terminado", setup: "Preparando" };
 let batches = {};
 let voiceState = null; // chrome.storage "fbrVoice" (lo escribe background.js)
+let musicState = null; // chrome.storage "fbrMusic"
 
-// Tarjeta de la VOZ (HeyGen): en curso / guardada / error, con el motivo.
-function voiceCard() {
-  const v = voiceState;
+// Tarjetas de AUDIO (voz de HeyGen y música de Mureka): en curso / guardada / error.
+function voiceCard() { return audioCard(voiceState, "Voz") + audioCard(musicState, "Música"); }
+function audioCard(v, name) {
   if (!v || !v.status || Date.now() - (v.startedAt || v.t || 0) > 12 * 3600e3) return "";
   const cls = v.status === "done" ? "ok" : v.status === "error" ? "bad" : "run";
-  const title = v.status === "done" ? "Voz terminada ✅" : v.status === "error" ? "Voz: error" : "Voz: generando…";
-  return `<section class="pcard voice ${cls}" aria-label="Voz de HeyGen" aria-live="polite">
+  const title = v.status === "done" ? `${name} terminada ✅` : v.status === "error" ? `${name}: error` : `${name}: generando…`;
+  return `<section class="pcard voice ${cls}" aria-label="${esc(name)}" aria-live="polite">
       <div class="pcard-h"><h2>${icon(v.status === "done" ? "check" : v.status === "error" ? "alert" : "activity", 16)} ${esc(title)}</h2></div>
       <p class="phase">${esc(v.msg || "")}</p>
       ${v.file ? `<div class="file">${esc(v.file)}</div>` : ""}
@@ -445,7 +463,7 @@ function voiceCard() {
 function renderProgress() {
   const list = Object.values(batches).sort((a, b) => a.accountKey.localeCompare(b.accountKey));
   const root = $("accountsProgress");
-  const voiceRunning = !!(voiceState && voiceState.status === "running");
+  const voiceRunning = !!(voiceState && voiceState.status === "running") || !!(musicState && musicState.status === "running");
   const anyRunning = list.some((b) => b.status === "running") || voiceRunning;
   $("stop").hidden = !anyRunning;
   $("stop2").hidden = !anyRunning;
@@ -453,8 +471,10 @@ function renderProgress() {
   const chip = $("globalStatus");
   if (!list.length && voiceCard()) {
     root.innerHTML = voiceCard();
-    chip.textContent = voiceRunning ? "Voz en curso" : voiceState.status === "done" ? "Voz terminada" : "Voz: error";
-    chip.className = voiceRunning ? "chip running" : voiceState.status === "done" ? "chip ok" : "chip warn";
+    const states = [voiceState, musicState].filter((x) => x && x.status);
+    const anyErr = states.some((x) => x.status === "error");
+    chip.textContent = voiceRunning ? "Audio en curso" : anyErr ? "Audio: con errores" : "Audio terminado";
+    chip.className = voiceRunning ? "chip running" : anyErr ? "chip warn" : "chip ok";
     $("progBadge").hidden = true;
     return;
   }
@@ -576,6 +596,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (k === "fbrLog") { logEntries = v.newValue || []; renderLog(); }
     if (k.startsWith("batch_")) { if (v.newValue) batches[k.slice(6)] = v.newValue; else delete batches[k.slice(6)]; prog = true; }
     if (k === "fbrVoice") { voiceState = v.newValue || null; prog = true; if (voiceState && voiceState.status === "done") toast(`Voz terminada: ${voiceState.file || ""}`); }
+    if (k === "fbrMusic") { musicState = v.newValue || null; prog = true; if (musicState && musicState.status === "done") toast(`Música terminada: ${musicState.file || ""}`); }
   }
   if (prog) renderProgress();
 });
@@ -609,6 +630,7 @@ $("uiMode").addEventListener("change", async (e) => {
   logEntries = all.fbrLog || [];
   for (const [k, v] of Object.entries(all)) if (k.startsWith("batch_") && v && v.order) batches[k.slice(6)] = v;
   voiceState = all.fbrVoice || null;
+  musicState = all.fbrMusic || null;
   await refreshFolder();
   await armActiveFlowTab().catch(() => {});
   await refreshArmed().catch(() => {});
@@ -618,5 +640,5 @@ $("uiMode").addEventListener("change", async (e) => {
   renderLog();
   let tab = null;
   try { tab = localStorage.getItem("fbrTab"); } catch (e) {}
-  showTab(Object.values(batches).some((b) => b.status === "running") || (voiceState && voiceState.status === "running") ? "progreso" : tab && TABS.includes(tab) ? tab : "lote");
+  showTab(Object.values(batches).some((b) => b.status === "running") || (voiceState && voiceState.status === "running") || (musicState && musicState.status === "running") ? "progreso" : tab && TABS.includes(tab) ? tab : "lote");
 })();

@@ -50,6 +50,11 @@ gastar puntos se reintenta solo al final (y, si es un fallo técnico, la extensi
 para la voz») y tienes abierta tu pestaña de HeyGen con la voz, la extensión borra el guion, escribe la narración, pulsa reproducir
 y guarda el audio nuevo como `audio.mp3` en la misma carpeta que los vídeos.
 
+**Música (v2.10)**: si el kit trae el prompt de música (encabezado «MÚSICA» o «PROMPT DE MÚSICA»; o escrito en el panel → «Prompt
+de música») y tienes abierta `www.mureka.ai/create` con tu sesión (pulsa la cereza en esa pestaña una vez), la extensión escribe el
+prompt, pulsa generar **una sola vez**, espera a que la canción nueva salga en Library, le da al play y guarda el archivo «music…»
+como `musica.mp3` en la misma carpeta.
+
 ## Primera prueba de la v2 (en este orden; las dos primeras cuestan 0 puntos)
 1. Recarga la extensión (⟳) y pulsa F5 en tus pestañas de Flow. Abre la ventanita (icono de la extensión).
 2. Salida → **Elegir** → Escritorio (o crea `Escritorio/MundoFut`). Debe poner "· con permiso".

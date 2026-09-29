@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Mureka (SIMULADO para pruebas)</title>
+<!--
+  Imitación MÍNIMA de www.mureka.ai (create + Library) con la estructura de los selectores que dio el
+  usuario (29 sep 2026), sin las partes largas. SIM: "generar" añade DOS canciones arriba de la biblioteca
+  (como Mureka), que están "Generating NN%" unos segundos y luego tienen play. Play en Library → un <audio>
+  pide https://cdn.mureka.ai/<id>/music_<id>.mp3 (206, como un CDN): lo que en DevTools sale en Media.
+  La música pesa 400000 + nº de caracteres del prompt: así la prueba comprueba que es la NUEVA.
+  Las canciones se guardan en localStorage (sobreviven a navegar/recargar, como la cuenta real).
+-->
+<style>
+  body { margin: 0; font: 13px system-ui, sans-serif; background: #101010; color: #ddd; display: flex; }
+  .main-nav { width: 160px; border-right: 1px solid #333; }
+  .nav-wraper-main > div { padding: 8px; cursor: pointer; }
+  .content { flex: 1; padding: 12px; }
+  textarea { width: 90%; min-height: 80px; }
+  .audio-item-info-play-box i { display: inline-block; width: 24px; height: 24px; background: #e8234b; border-radius: 50%; cursor: pointer; }
+  .item { padding: 8px; border-bottom: 1px solid #333; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="main-nav"><div><div class="main-nav-box flex1 height-0"><div><div>
+    <div class="nav-wraper-main">
+      <div><div>Home</div></div>
+      <div><div>Create</div></div>
+      <div><div>Explore</div></div>
+      <div><div>Studio</div></div>
+      <div><div>Voices</div></div>
+      <div id="navLibrary"><div>Library</div></div>
+    </div>
+  </div></div></div></div></div>
+  <div class="content" id="content"></div>
+</div>
+<script>
+const P = new URLSearchParams(location.search);
+const GEN_MS = +(P.get("genMs") || localStorage.getItem("muGenMs") || 12000);
+if (P.get("genMs")) localStorage.setItem("muGenMs", P.get("genMs"));
+// needsFrames=1: como muchas webs, los clics no hacen nada hasta el siguiente fotograma
+// (requestAnimationFrame): con la pestaña oculta y sin fotogramas, nunca llega.
+if (P.get("needsFrames")) localStorage.setItem("muFrames", "1");
+const frame = () => localStorage.getItem("muFrames") ? new Promise((r) => requestAnimationFrame(r)) : Promise.resolve();
+const songs = () => JSON.parse(localStorage.getItem("muSongs") || "null") || [{ id: "old0001", title: "Canción vieja de ayer", prompt: "old", readyAt: 0 }];
+const saveSongs = (s) => localStorage.setItem("muSongs", JSON.stringify(s));
+const inc = (k) => localStorage.setItem(k, String(+(localStorage.getItem(k) || 0) + 1));
+let audio = null;
+
+function render() {
+  const c = document.getElementById("content");
+  if (/\/library/.test(location.pathname)) {
+    const now = Date.now();
+    c.innerHTML = `<h2>Library</h2><div class="search-result-box"><div class="pull-to-load-main-list">${songs().map((s) => {
+      const busy = s.readyAt > now;
+      const pct = busy ? Math.min(99, Math.round(100 - ((s.readyAt - now) / GEN_MS) * 100)) : 100;
+      return `<div class="item" data-id="${s.id}"><div><div><div><div><div>
+        <div class="audio-item-info-play-box"><div><div><div>${busy ? "" : "<i></i>"}</div></div></div></div>
+        <span>${s.title}</span> <small>${busy ? `Generating ${pct}%` : "3:12"}</small>
+      </div></div></div></div></div></div>`;
+    }).join("")}</div></div>`;
+    c.querySelectorAll(".item i").forEach((i) => i.addEventListener("click", async () => {
+      await frame();
+      const id = i.closest(".item").dataset.id;
+      const s = songs().find((x) => x.id === id);
+      if (audio && !audio.paused) { audio.pause(); inc("muPauses"); return; }
+      inc("muPlayed");
+      localStorage.setItem("muPlayedId", id);
+      audio = document.createElement("audio");
+      audio.src = `https://cdn.mureka.ai/${id}/music_${id}.mp3?len=${s.prompt.length}`;
+      document.body.appendChild(audio);
+      audio.play().catch(() => {});
+    }));
+  } else {
+    c.innerHTML = `<div class="co-produce-mode"><div class="co-produce-mode__composer"><div><form onsubmit="return false">
+      <textarea placeholder="Describe your song"></textarea>
+      <div class="composer__primary-actions"><button type="button"><span class="composer__submit-icon">➤</span></button></div>
+    </form></div></div></div>`;
+    const ta = c.querySelector("textarea");
+    let val = "";
+    ta.addEventListener("input", () => { val = ta.value; }); // como Vue: solo cuenta lo que llega por "input"
+    c.querySelector("button").addEventListener("click", async () => {
+      await frame();
+      if (!val.trim()) return;
+      inc("muGenerated");
+      localStorage.setItem("muPrompt", val);
+      const t = Date.now() + GEN_MS;
+      const n = +(localStorage.getItem("muGenerated"));
+      saveSongs([{ id: `new${n}a`, title: `Nueva ${n} (a)`, prompt: val, readyAt: t }, { id: `new${n}b`, title: `Nueva ${n} (b)`, prompt: val, readyAt: t + 1000 }, ...songs()]);
+      ta.value = ""; val = "";
+    });
+  }
+}
+document.getElementById("navLibrary").addEventListener("click", () => { history.pushState({}, "", "/library"); render(); });
+addEventListener("popstate", render);
+render();
+// Como la web real, la lista se refresca sola de vez en cuando (el % avanza).
+setInterval(() => { if (/\/library/.test(location.pathname) && songs().some((s) => s.readyAt > Date.now() - 3000)) render(); }, 2000);
+</script>
+</body>
+</html>
