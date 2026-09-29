@@ -26,7 +26,7 @@
   <div class="tw-h-[168px]">
     <div class="tw-flex tw-w-full tw-flex-row tw-items-center tw-justify-between tw-border-b tw-border-line tw-pb-2">
       <div class="tw-relative tw-flex tw-flex-row tw-items-center tw-gap-3">
-        <div><div class="play" id="play"></div></div>
+        <div><div><button class="play" id="play" aria-label=""></button></div></div>
         <div>Voz: Mi voz</div>
       </div>
     </div>
@@ -34,6 +34,18 @@
 </div>
 <script>
 const P = new URLSearchParams(location.search);
+// SIM (prueba real v2.9.1): HeyGen muestra el guion con SU formato (comillas
+// tipográficas, espacios duros…), así que el texto no es idéntico al pegado.
+const ed = document.getElementById("script");
+let fmtT = null;
+ed.addEventListener("input", () => {
+  clearTimeout(fmtT);
+  fmtT = setTimeout(() => {
+    const txt = ed.innerText;
+    const f = txt.replace(/"([^"]*)"/g, "“$1”").replace(/¿/g, "¿\u00a0");
+    if (f !== txt) ed.innerHTML = f.split(/\n+/).map((l) => `<p>${l.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</p>`).join("");
+  }, 300);
+});
 document.getElementById("play").addEventListener("click", async () => {
   const text = document.getElementById("script").innerText.replace(/\s+/g, " ").trim();
   sessionStorage.setItem("hgPlayed", String(+(sessionStorage.getItem("hgPlayed") || 0) + 1));

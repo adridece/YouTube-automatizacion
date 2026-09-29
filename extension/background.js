@@ -783,7 +783,7 @@ async function runVoice(v) {
       if (list) list.clear();
       const r = await sendToHeygen(tabId, { type: "HG_SPEAK", text: v.text });
       if (!r || !r.ok) throw new Error((r && r.error) || "la pestaña de HeyGen no respondió");
-      vlog("info", `Narración escrita en el guion y botón de reproducir pulsado${r.realClick ? "" : " (clic normal)"}. Espero el audio nuevo…`);
+      vlog("info", `Narración escrita en el guion${r.partial ? ` (no pude confirmarla entera: el guion tiene ${r.chars} caracteres; sigo igualmente)` : ""} y botón de reproducir pulsado (${r.playHow}${r.realClick ? ", clic real" : ", clic normal"}). Espero el audio nuevo…`);
       // Espera al NUEVO audio (hasta 2 min: HeyGen lo genera antes de sonar).
       let found = null;
       for (let i = 0; i < 120 && !found; i++) {
@@ -791,6 +791,11 @@ async function runVoice(v) {
         const net = list ? [...list.entries()].filter(([, m]) => m.t >= since - 500 && m.url && !/^data:/.test(m.url)) : [];
         const audio = net.find(([, m]) => /^audio\//i.test(m.mime)) || net.find(([, m]) => m.type === "Media");
         if (audio) { found = { requestId: audio[0], ...audio[1], via: "depurador" }; break; }
+        if (i === 15 || i === 45) {
+          // Nada en la red todavía: se vuelve a pulsar reproducir (sin reescribir el texto).
+          const again = await sendToHeygen(tabId, { type: "HG_PLAY", plain: i === 15 }).catch(() => null);
+          vlog("info", `Aún no hay audio nuevo en la red: vuelvo a pulsar reproducir${again && again.ok ? "" : ` (no pude: ${(again && again.error) || "sin respuesta"})`}.`);
+        }
         if (i % 3 === 2) {
           const hm = await sendToHeygen(tabId, { type: "HG_MEDIA", since }).catch(() => null);
           const it = hm && hm.items && hm.items.find((x) => x.url && !/^data:/.test(x.url));

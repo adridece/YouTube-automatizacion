@@ -122,7 +122,7 @@ const SCENARIOS = {
   voice: {
     desc: "VOZ (HeyGen): el kit trae narración; en la pestaña de HeyGen se borra el guion viejo, se escribe la narración, se pulsa reproducir y el audio nuevo se guarda como audio.mp3 en la carpeta del lote",
     askWhereToSave: true, dest: "folder", heygen: true,
-    narration: "En 1998 un chico de barrio soñaba con jugar en el estadio. Nadie creía en él. Y entonces llegó su noche.",
+    narration: "\"¿Quién era ese chico?\" En 1998 un chico de barrio soñaba con jugar en el estadio. Nadie creía en él. Y entonces llegó su noche.",
     u2: "", u3: "",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: [...FILES, "audio.mp3"], logHas: ["Voz guardada"] },
   },
@@ -341,11 +341,12 @@ async function runScenario(name, sc, server) {
     if (E.mode) check(`el panel eligió solo el modo "${E.mode}"`, logTxt.includes(`modo ${E.mode}`) || (E.mode === "voiceOnly" && /solo la voz/.test(logTxt)));
     if (vids.length) check("cada archivo es el vídeo de SU escena (no cruzados)", vids.every(sizeOk), vids.map((f) => `${f}=${files[f]}`).join(" "));
     if (sc.heygen) {
-      const hgState = await hg.evaluate(() => ({ text: document.getElementById("script").innerText.replace(/\s+/g, " ").trim(), played: +(sessionStorage.getItem("hgPlayed") || 0) }));
+      const hgState = await hg.evaluate(() => ({ text: document.getElementById("script").innerText.replace(/\s+/g, " ").trim(), played: +(sessionStorage.getItem("hgPlayed") || 0), atPlay: sessionStorage.getItem("hgText") || "" }));
+      const core = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9ñ]/g, "");
       const want = sc.narration.replace(/\s+/g, " ").trim();
-      check("HeyGen: guion reemplazado por la narración del kit (sin el texto viejo)", hgState.text === want, JSON.stringify(hgState.text.slice(0, 80)));
-      check("HeyGen: reproducir pulsado una vez", hgState.played === 1, `${hgState.played}`);
-      check("audio.mp3 en la carpeta del lote y es el del texto nuevo", files["audio.mp3"] === 200000 + want.length, `audio.mp3=${files["audio.mp3"]} (esperado ${200000 + want.length})`);
+      check("HeyGen: guion reemplazado por la narración del kit (sin el texto viejo ni repetido)", core(hgState.text) === core(want), JSON.stringify(hgState.text.slice(0, 80)));
+      check("HeyGen: reproducir pulsado una vez (el texto ya estaba bien)", hgState.played === 1, `${hgState.played}`);
+      check("audio.mp3 en la carpeta del lote y es el del texto nuevo", core(hgState.atPlay) === core(want) && files["audio.mp3"] === 200000 + hgState.atPlay.length, `audio.mp3=${files["audio.mp3"]} (esperado ${200000 + hgState.atPlay.length})`);
     }
     check('ningún diálogo "Guardar como" pendiente', stuck.length === 0, `${downloads.length} descargas vistas, ${stuck.length} atascadas`);
     if (name === "folder" || name === "resume") check("sin ERRORes falsos en el log", !/ERROR: Chrome interrumpió/.test(logTxt));
