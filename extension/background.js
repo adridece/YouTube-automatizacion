@@ -696,25 +696,56 @@ async function sendToHeygen(tabId, msg) {
 }
 
 // Peticiones de audio/vídeo vistas por el depurador en cada pestaña.
-const netMedia = new Map(); // tabId -> Map(requestId -> {url, type, mime, status, t, finished})
+const netMedia = new Map(); // tabId -> Map(requestId -> {url, type, mime, status, t, finished, fromCache, body, contentRange})
+const hdr = (headers, name) => {
+  if (!headers) return null;
+  if (Array.isArray(headers)) { const h = headers.find((x) => String(x.name).toLowerCase() === name); return h ? h.value : null; }
+  const k = Object.keys(headers).find((x) => x.toLowerCase() === name);
+  return k ? headers[k] : null;
+};
 if (chrome.debugger) {
   chrome.debugger.onEvent.addListener((src, method, params) => {
     const list = netMedia.get(src.tabId);
-    if (!list) return;
+    if (!list) {
+      // Nunca dejar una petición parada (la página se quedaría esperando).
+      if (method === "Fetch.requestPaused") chrome.debugger.sendCommand({ tabId: src.tabId }, "Fetch.continueRequest", { requestId: params.requestId }).catch(() => {});
+      return;
+    }
     if (method === "Network.requestWillBeSent") {
       const r = params.request || {};
       if (params.type === "Media" || /\.(mp3|wav|m4a|aac|ogg|opus)(\?|$)/i.test(r.url || "")) {
-        list.set(params.requestId, { url: r.url, type: params.type, mime: "", status: 0, t: Date.now(), finished: false });
+        list.set(params.requestId, { ...(list.get(params.requestId) || {}), url: r.url, type: params.type, mime: "", status: 0, t: Date.now(), finished: false });
       }
     } else if (method === "Network.responseReceived") {
       const r = params.response || {};
       const known = list.get(params.requestId);
       if (known || params.type === "Media" || /^audio\//i.test(r.mimeType || "")) {
-        list.set(params.requestId, { ...(known || { t: Date.now(), finished: false }), url: r.url, type: params.type, mime: r.mimeType || "", status: r.status || 0 });
+        list.set(params.requestId, { ...(known || { t: Date.now(), finished: false }), url: r.url, type: params.type, mime: r.mimeType || "", status: r.status || 0, fromCache: !!(r.fromDiskCache || r.fromMemoryCache), contentRange: hdr(r.headers, "content-range") });
       }
     } else if (method === "Network.loadingFinished") {
       const known = list.get(params.requestId);
       if (known) known.finished = true;
+    } else if (method === "Fetch.requestPaused") {
+      // Respuesta de un "media" interceptada ANTES de llegar a la página: se
+      // guarda una copia de su contenido (así da igual que sea 206 o que
+      // Chrome no conserve el cuerpo de los media) y se deja continuar.
+      (async () => {
+        const tabId = src.tabId;
+        const url = (params.request && params.request.url) || "";
+        const mime = (hdr(params.responseHeaders, "content-type") || "").split(";")[0];
+        const rec = { url, type: params.resourceType, mime, status: params.responseStatusCode || 0, t: Date.now(), finished: true, contentRange: hdr(params.responseHeaders, "content-range"), via: "interceptado" };
+        try {
+          if (voiceMediaScore(rec) > 0) {
+            const body = await chrome.debugger.sendCommand({ tabId }, "Fetch.getResponseBody", { requestId: params.requestId });
+            rec.body = body.base64Encoded ? body.body : btoa(unescape(encodeURIComponent(body.body)));
+          }
+        } catch (e) {
+          rec.bodyError = e.message;
+        } finally {
+          await chrome.debugger.sendCommand({ tabId }, "Fetch.continueRequest", { requestId: params.requestId }).catch(() => {});
+        }
+        list.set(`fetch-${params.requestId}`, rec);
+      })();
     }
   });
 }
@@ -820,23 +851,92 @@ async function runVoiceInner(v) {
 
   // 2) Escuchar la red de la pestaña (lo mismo que DevTools → Network → Media).
   let list = null;
-  try {
+  const listen = async () => {
     await dbgEnsure(tabId);
-    list = new Map();
+    list = list || new Map();
     netMedia.set(tabId, list);
     await chrome.debugger.sendCommand({ tabId }, "Network.enable", {});
     // Que el audio no salga de la caché: así la petición aparece seguro.
     await chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: true }).catch(() => {});
+    await chrome.debugger.sendCommand({ tabId }, "Fetch.enable", { patterns: [{ resourceType: "Media", requestStage: "Response" }] }).catch(() => {});
+  };
+  try {
+    await listen();
   } catch (e) {
     vlog("warn", `No pude escuchar la red de HeyGen con el depurador (${e.message}); busco el audio en la propia página.`);
   }
   const cleanup = async () => {
     if (netMedia.has(tabId)) {
+      await chrome.debugger.sendCommand({ tabId }, "Fetch.disable", {}).catch(() => {});
       netMedia.delete(tabId);
       await chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: false }).catch(() => {});
     }
     const running = await getRunningTabs();
     if (!running[tabId]) await dbgDetach(tabId);
+  };
+  // Todas las peticiones media vistas desde `since` (para el log y para elegir).
+  const seen = (since) => (list ? [...list.values()].filter((m) => m.t >= since - 500 && m.url) : []);
+  const describe = (arr) => arr.map((m) => `${m.url.split("?")[0].split("/").pop() || m.url.slice(0, 40)}${/[?&]id=/.test(m.url) ? "?id=…" : ""} (${m.status || "?"}${m.mime ? ", " + m.mime : ""}${m.fromCache ? ", caché" : ""})`).join(" · ");
+  // Espera la VOZ (nunca las animaciones appear/disappear_v1.webm).
+  const waitVoice = async (since, maxS, label) => {
+    for (let i = 0; i < maxS; i++) {
+      await new Promise((res) => setTimeout(res, 1000));
+      const best = pickVoiceMedia(seen(since));
+      if (best) {
+        // Si la vio el depurador de red, dar unos segundos a que llegue también la copia interceptada.
+        for (let k = 0; k < 10 && !seen(since).some((m) => m.body && m.url === best.url); k++) await new Promise((res) => setTimeout(res, 500));
+        return pickVoiceMedia(seen(since).filter((m) => m.url === best.url && m.body)) || best;
+      }
+      if (i % 3 === 2) {
+        const hm = await sendToHeygen(tabId, { type: "HG_MEDIA", since }).catch(() => null);
+        const it = pickVoiceMedia(((hm && hm.items) || []).map((x) => ({ url: x.url, mime: "" })));
+        if (it) return { ...it, via: "página" };
+      }
+      if (i > 0 && i % 60 === 0) vlog("info", `${label}: sigo esperando el audio (${i / 60} min). Visto en la red hasta ahora: ${describe(seen(since)) || "nada"}.`);
+    }
+    return null;
+  };
+  // Lee los bytes COMPLETOS de la voz por todas las vías posibles.
+  const readVoice = async (m) => {
+    const tries = [];
+    if (m.body) {
+      const len = Math.floor((m.body.length * 3) / 4);
+      if (contentRangeIsFull(m.contentRange, null) && len > 1000) return { b64: m.body, mime: m.mime, how: "copia interceptada" };
+      tries.push(`copia interceptada parcial (${m.contentRange})`);
+    }
+    // Desde la propia página (con sus cookies), pidiendo el archivo entero.
+    try {
+      const expr = `(async () => { const r = await fetch(${JSON.stringify(m.url)}, { credentials: "include" }); const b = await r.blob(); const d = await new Promise((ok) => { const f = new FileReader(); f.onload = () => ok(String(f.result).split(",")[1] || ""); f.readAsDataURL(b); }); return JSON.stringify({ s: r.status, t: b.type, n: b.size, d }); })()`;
+      const ev = await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true });
+      const o = JSON.parse((ev && ev.result && ev.result.value) || "{}");
+      if (o.d && o.n > 1000 && o.s < 300) return { b64: o.d, mime: o.t || m.mime, how: "descargado desde la página" };
+      tries.push(`página: HTTP ${o.s}, ${o.n} bytes`);
+    } catch (e) { tries.push(`página: ${e.message}`); }
+    const f = await sendToHeygen(tabId, { type: "HG_FETCH", url: m.url }).catch((e) => ({ ok: false, error: e.message }));
+    if (f && f.ok && f.size > 1000) return { b64: f.data, mime: f.mime || m.mime, how: "descargado (extensión en la página)" };
+    tries.push(`extensión en la página: ${(f && f.error) || "sin datos"}`);
+    if (/^https:/.test(m.url)) return { url: m.url, how: "por URL", tries };
+    return { error: tries.join("; ") };
+  };
+  const saveVoice = async (m) => {
+    const got = await readVoice(m);
+    const ext = audioExtFromMime(got.mime || m.mime, m.url);
+    const relPath = `${v.batchFolder}/audio.${ext}`;
+    if (ext !== "mp3") vlog("warn", `El audio de HeyGen es ${ext.toUpperCase()}, no MP3: lo guardo como audio.${ext} (sin convertirlo).`);
+    if (got.b64) {
+      vlog("info", `Audio leído (${got.how}, ${Math.round((got.b64.length * 3) / 4 / 1024)} KB).`);
+      return saveVoiceBytes(got.b64, got.mime || "audio/mpeg", relPath, v.destMode);
+    }
+    if (got.url) {
+      if (v.destMode === "folder") {
+        const res = await offscreenCall({ type: "FS_SAVE_URL", url: got.url, relPath });
+        if (!res || !res.ok) throw new Error(`no pude leer el audio (${[...(got.tries || []), `por URL: ${(res && res.error) || "sin respuesta"}`].join("; ")})`);
+        return res.path || relPath;
+      }
+      await ownDownload(got.url, relPath);
+      return `Descargas/MundoFutFlow/${relPath}`;
+    }
+    throw new Error(`no pude leer el audio (${got.error})`);
   };
 
   try {
@@ -846,59 +946,43 @@ async function runVoiceInner(v) {
     const p = await sendToHeygen(tabId, { type: "HG_PLAY_ONCE", text: v.text }).catch((e) => ({ ok: false, error: e.message }));
     if (!p || !p.ok) return { ok: false, error: `${(p && p.error) || "la pestaña de HeyGen no respondió"}. No se ha gastado ninguna previsualización.` };
     const used = await addPreview();
-    vlog("info", `Botón de reproducir pulsado UNA vez (${p.real ? "clic real" : "clic normal"}). Previsualizaciones usadas hoy: ${used}/${PREVIEW_MAX}. Espero a que HeyGen genere el audio (hasta 4 min, sin volver a pulsar)…`);
+    vlog("info", `Botón de reproducir pulsado UNA vez (${p.real ? "clic real" : "clic normal"}). Previsualizaciones usadas hoy: ${used}/${PREVIEW_MAX}. Espero el audio (id=…) sin volver a pulsar…`);
     await setVoiceState({ msg: `Generando la voz en HeyGen… (previsualización ${used}/${PREVIEW_MAX} de hoy)` });
 
-    // 4) Esperar el audio nuevo SIN volver a pulsar.
-    let found = null;
-    for (let i = 0; i < 240 && !found; i++) {
-      await new Promise((res) => setTimeout(res, 1000));
-      const net = list ? [...list.entries()].filter(([, m]) => m.t >= since - 500 && m.url && !/^data:/.test(m.url)) : [];
-      const audio = net.find(([, m]) => /^audio\//i.test(m.mime)) || net.find(([, m]) => m.type === "Media");
-      if (audio) { found = { requestId: audio[0], ...audio[1], via: "red" }; break; }
-      if (i % 3 === 2) {
-        const hm = await sendToHeygen(tabId, { type: "HG_MEDIA", since }).catch(() => null);
-        const it = hm && hm.items && hm.items.find((x) => x.url && !/^data:/.test(x.url));
-        if (it) found = { url: it.url, mime: "", via: it.source };
+    // 4) Esperar la voz. Si en 90 s no aparece, RECARGAR la página de HeyGen
+    //    (idea del usuario: al recargar, el audio ya generado sale en la red).
+    //    Recargar no gasta previsualizaciones; nunca se vuelve a pulsar play.
+    let found = await waitVoice(since, 90, "Tras pulsar reproducir");
+    const tryReload = async (why) => {
+      vlog("info", `${why} Recargo la página de HeyGen para que cargue el audio ya generado (no gasta previsualizaciones)…`);
+      await setVoiceState({ msg: "Recargando HeyGen para recoger el audio…" });
+      const since2 = Date.now();
+      await chrome.tabs.reload(tabId, { bypassCache: true }).catch(() => {});
+      for (let i = 0; i < 60; i++) {
+        const t = await chrome.tabs.get(tabId).catch(() => null);
+        if (t && t.status === "complete") break;
+        await new Promise((res) => setTimeout(res, 1000));
       }
-      if (i > 0 && i % 60 === 0) vlog("info", `Sigo esperando el audio de HeyGen (${i / 60} min)…`);
-    }
-    if (!found) return { ok: false, error: `pulsé reproducir una vez pero en 4 min no apareció el audio en la red. No lo vuelvo a pulsar para no gastar otra previsualización (usadas hoy: ${used}/${PREVIEW_MAX}). Mira en HeyGen si suena la voz y pásame el log.` };
-    vlog("info", `Audio nuevo detectado (${found.via}): ${found.url.slice(0, 90)}${found.url.length > 90 ? "…" : ""}${found.mime ? ` · ${found.mime}` : ""}`);
+      await listen().catch(() => {});
+      return waitVoice(since2, 120, "Tras recargar");
+    };
+    if (!found) found = await tryReload(`En 90 s no apareció la voz en la red (vi: ${describe(seen(since)) || "nada"}).`);
+    if (!found) return { ok: false, error: `pulsé reproducir una vez y recargué la página, pero no apareció el audio (id=…) en la red. No vuelvo a pulsar para no gastar otra previsualización (usadas hoy: ${used}/${PREVIEW_MAX}). Pásame el log.` };
+    vlog("info", `Voz detectada (${found.via || "red"}): ${found.url.slice(0, 100)}${found.url.length > 100 ? "…" : ""} · ${found.status || "?"}${found.mime ? " · " + found.mime : ""}`);
     await setVoiceState({ msg: "Guardando el audio…" });
-    if (found.requestId && list) for (let i = 0; i < 60 && !(list.get(found.requestId) || {}).finished; i++) await new Promise((res) => setTimeout(res, 1000));
 
     // 5) Guardar (se puede reintentar: no gasta previsualizaciones).
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        let bytes = null;
-        const f = await sendToHeygen(tabId, { type: "HG_FETCH", url: found.url }).catch((e) => ({ ok: false, error: e.message }));
-        if (f && f.ok && f.size > 1000) bytes = { b64: f.data, mime: f.mime || found.mime };
-        if (!bytes && found.requestId) {
-          try {
-            const body = await chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", { requestId: found.requestId });
-            const b64 = body.base64Encoded ? body.body : btoa(unescape(encodeURIComponent(body.body)));
-            if (b64.length > 1400 && (found.status === 200 || !found.status)) bytes = { b64, mime: found.mime };
-          } catch (e) {}
-        }
-        const ext = audioExtFromMime(bytes ? bytes.mime : found.mime, found.url);
-        const relPath = `${v.batchFolder}/audio.${ext}`;
-        if (ext !== "mp3") vlog("warn", `El audio de HeyGen es ${ext.toUpperCase()}, no MP3: lo guardo como audio.${ext} (sin convertirlo).`);
-        if (bytes) return { ok: true, file: await saveVoiceBytes(bytes.b64, bytes.mime || "audio/mpeg", relPath, v.destMode) };
-        if (/^https:/.test(found.url)) {
-          if (v.destMode === "folder") {
-            const res = await offscreenCall({ type: "FS_SAVE_URL", url: found.url, relPath });
-            if (!res || !res.ok) throw new Error(`no pude leer el audio (${(res && res.error) || "sin respuesta"})`);
-            return { ok: true, file: res.path || relPath };
-          }
-          await ownDownload(found.url, relPath);
-          return { ok: true, file: `Descargas/MundoFutFlow/${relPath}` };
-        }
-        throw new Error(`no pude leer el audio (${(f && f.error) || "URL no descargable"})`);
+        return { ok: true, file: await saveVoice(found) };
       } catch (e) {
         lastErr = e.message;
         vlog("warn", `Voz: guardar el audio, intento ${attempt}/3: ${e.message}`);
-        await new Promise((res) => setTimeout(res, 3000));
+        if (attempt === 2) {
+          // Última idea: recargar y recoger la copia interceptada de la carga nueva.
+          const again = await tryReload("No pude leer el audio.");
+          if (again) found = again;
+        } else await new Promise((res) => setTimeout(res, 3000));
       }
     }
     return { ok: false, error: `el audio se generó pero no pude guardarlo: ${lastErr}` };

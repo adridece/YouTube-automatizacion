@@ -140,6 +140,13 @@ const SCENARIOS = {
     u2: "", u3: "",
     expect: { scenes: {}, approvals: { u2: 0, u3: 0 }, files: [], noPlay: true, mode: "voiceOnly" },
   },
+  voicereload: {
+    desc: "VOZ que no sale en la red tras pulsar reproducir, solo al RECARGAR HeyGen (lo que contó el usuario): se recarga sola, se recoge el audio id=… y NO se vuelve a pulsar play",
+    askWhereToSave: true, dest: "folder", heygen: true, noFlow: true, kit: "none", hg: "audioOnReload=1", timeoutMin: 6,
+    narration: "La voz de este short solo aparece después de recargar la página.",
+    u2: "", u3: "",
+    expect: { scenes: {}, approvals: { u2: 0, u3: 0 }, files: ["audio.mp3"], logHas: ["Recargo la página de HeyGen", "Voz guardada"], mode: "voiceOnly" },
+  },
   imgonly: {
     desc: "SOLO IMÁGENES: el kit trae solo los prompts de imagen → se hacen las imágenes sin pedir vídeos (antes el panel lo bloqueaba)",
     askWhereToSave: true, dest: "folder", kit: "imagesOnly",
@@ -183,7 +190,7 @@ async function runScenario(name, sc, server) {
   const chrome = spawn(CHROME, [
     `--user-data-dir=${prof}`, "--no-sandbox", "--no-first-run", "--no-default-browser-check",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--disable-features=DisableLoadExtensionCommandLineSwitch",
-    "--remote-debugging-port=9333", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443", "--ignore-certificate-errors",
+    "--remote-debugging-port=9333", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443, MAP resource2.heygen.ai 127.0.0.1:8443", "--ignore-certificate-errors",
     "--no-proxy-server", "--window-size=1400,900", "about:blank",
   ], { stdio: "ignore" });
   let browser;
@@ -400,9 +407,24 @@ async function main() {
       if (m) { res.setHeader("Content-Type", "video/mp4"); return res.end(Buffer.alloc(350000 + parseInt(m[1], 10), 7)); }
       res.statusCode = 404; return res.end();
     }
+    const sendRange = (buf, type) => {
+      // Como un CDN real: responde 206 a las peticiones con Range (las del <audio>).
+      res.setHeader("Content-Type", type);
+      res.setHeader("Accept-Ranges", "bytes");
+      const r = /bytes=(\d+)-(\d*)/.exec(req.headers.range || "");
+      if (!r) return res.end(buf);
+      const start = +r[1], end = r[2] ? Math.min(+r[2], buf.length - 1) : buf.length - 1;
+      res.statusCode = 206;
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${buf.length}`);
+      return res.end(buf.subarray(start, end + 1));
+    };
+    if ((req.headers.host || "").startsWith("resource2.heygen.ai")) {
+      const m = req.url.match(/^\/v1\/voice\?id=[0-9a-f-]+&chars=(\d+)/);
+      if (m) return sendRange(Buffer.alloc(200000 + parseInt(m[1], 10), 9), "audio/mpeg"); // sin cabeceras CORS, como un CDN
+      res.statusCode = 404; return res.end();
+    }
     if ((req.headers.host || "").startsWith("app.heygen.com")) {
-      const m = req.url.match(/^\/tts\/[^?]+\.mp3\?chars=(\d+)/);
-      if (m) { res.setHeader("Content-Type", "audio/mpeg"); return res.end(Buffer.alloc(200000 + parseInt(m[1], 10), 9)); }
+      if (req.url.startsWith("/ui/")) return sendRange(Buffer.alloc(6000, 3), "video/webm");
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.end(fs.readFileSync(path.join(__dirname, "mock-heygen.html")));
     }
@@ -410,7 +432,7 @@ async function main() {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicereload", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));
