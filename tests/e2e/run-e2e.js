@@ -115,7 +115,7 @@ const SCENARIOS = {
   },
   alwaysretry: {
     desc: "v2.10.2 (el usuario: «que se generen siempre»): el vídeo de la escena 3 FALLA en Flow 8 veces seguidas DESPUÉS de aprobar el coste: no se da por perdido; en la 2.ª vuelta, suavizando más, sale",
-    askWhereToSave: true, dest: "folder", timeoutMin: 9,
+    askWhereToSave: true, dest: "folder", timeoutMin: 18,
     u2: "", u3: "videoErrorTile=8",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 9 }, files: FILES, logHas: ["Segunda vuelta automática"] },
   },

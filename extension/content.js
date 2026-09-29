@@ -1216,6 +1216,13 @@ async function phaseVideos(cfg) {
         await setStep(n, "download", "pending");
         await processSceneVideo(n, cfg, maxWaitMs, pass);
       }
+      // Fallos TÉCNICOS (no se pudo adjuntar/enviar) tras la 2.ª vuelta: F5 ya
+      // (suele desatascar Flow), sin esperar a las demás vueltas. Máx. 2.
+      const techNow = batch.order.filter((n) => sceneRetryable(n, cfg) && batch.scenes[n].failKind === "tech");
+      if (techNow.length && (batch.autoReloads || 0) < 2) {
+        for (const n of techNow) { batch.scenes[n].video = "pending"; batch.scenes[n].download = "pending"; }
+        throw new ReloadError(`las escenas ${techNow.map(pad3).join(", ")} fallaron por un problema técnico (adjuntar/enviar)`);
+      }
     }
     // Si aún quedan fallos TÉCNICOS (no se pudo adjuntar/enviar), se recarga
     // la página (F5) y se reanuda solo: suele desatascar Flow. Máx. 2 veces.
