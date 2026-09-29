@@ -138,5 +138,6 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 - Botón reproducir: `… div.tw-h-[168px] > div.tw-flex.tw-w-full.tw-flex-row.tw-items-center.tw-justify-between.tw-border-b.tw-border-line.tw-pb-2
   > div.tw-relative.tw-flex.tw-flex-row.tw-items-center.tw-gap-3 > div:nth-child(1) > div`.
 - Al reproducir aparece una petición nueva de tipo **Media** en la red: ese es el audio que se guarda (audio.mp3).
+- **[V por el usuario, 29 sep]** HeyGen solo deja **previsualizar la voz 3 veces al día**; sin previsualización no hay audio en la red.
 - **[V por el usuario, 29 sep]** El botón exacto es el `<button>` dentro de ese div (`… > div:nth-child(1) > div > button`).
 - **[V-indirecto, log v2.9.1]** Tras pegar, el guion muestra la narración con otro formato (no idéntico carácter a carácter).

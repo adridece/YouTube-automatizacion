@@ -2,9 +2,11 @@
  * Cerezium Autopilot — pestaña de HeyGen (v2.9): genera la VOZ del Short.
  *
  * Lo manda background.js (runVoice) al empezar un lote con narración:
- *   HG_SPEAK {text}  → borra lo que haya en el guion, escribe la narración y
- *                      pulsa el botón de reproducir (clic REAL vía depurador,
- *                      para que el navegador deje reproducir el audio).
+ *   HG_WRITE {text}  → borra lo que haya en el guion y escribe la narración
+ *                      (NO pulsa play).
+ *   HG_PLAY_ONCE {text} → pulsa reproducir UNA vez (clic REAL vía depurador),
+ *                      solo si el guion es exactamente la narración: HeyGen
+ *                      permite 3 previsualizaciones al día.
  *   HG_MEDIA {since} → audios/vídeos que la página ha cargado desde `since`
  *                      (lo mismo que se ve en DevTools → Network → Media).
  *   HG_FETCH {url}   → lee ese audio desde la propia página y lo devuelve en
@@ -83,6 +85,20 @@ async function clearEditor(getEd) {
     for (let k = 0; k < 8 && editorText(getEd()); k++) await sleep(250);
   }
   return !editorText(getEd());
+}
+
+// ¿El guion tiene EXACTAMENTE la narración? "ok" · "parcial" · "doble" · "no".
+function scriptState(text) {
+  const ed = findEditor();
+  if (!ed) return "no";
+  const want = core(text);
+  const c = core(editorText(ed));
+  if (c === want) return "ok";
+  const hasStart = c.includes(want.slice(0, 60));
+  const hasEnd = c.includes(want.slice(-40));
+  if (hasStart && hasEnd && c.length <= want.length * 1.1 + 20) return "ok";
+  if (hasStart && c.length > want.length * 1.1 + 20) return "doble";
+  return hasStart ? "parcial" : "no";
 }
 
 async function writeScript(text) {
@@ -207,19 +223,28 @@ function blobToBase64(blob) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.target === "offscreen") return false;
   if (msg.type === "HG_PING") { sendResponse({ ok: true, url: location.href, hasEditor: !!findEditor(), hasPlay: !!findPlayButton() }); return false; }
-  if (msg.type === "HG_SPEAK") {
+  if (msg.type === "HG_WRITE") {
+    // Solo escribe (NO pulsa play): pulsar play gasta una previsualización.
     (async () => {
       const w = await writeScript(msg.text);
       await sleep(1500); // HeyGen guarda el guion con un pequeño retraso
-      const at = Date.now();
-      const p = await clickPlay();
-      return { ok: true, writeMethod: w.method, partial: !!w.partial, chars: w.chars || null, playHow: p.how, realClick: p.real, clickedAt: at };
+      return { ok: true, writeMethod: w.method, state: scriptState(msg.text), chars: editorText(findEditor() || document.body).length };
     })().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
-  if (msg.type === "HG_PLAY") {
-    // Solo pulsar reproducir otra vez (el texto ya está bien puesto).
-    clickPlay(msg.plain).then((p) => sendResponse({ ok: true, ...p }), (e) => sendResponse({ ok: false, error: e.message }));
+  if (msg.type === "HG_PLAY_ONCE") {
+    // Pulsa reproducir UNA vez, y solo si el guion es exactamente la narración
+    // y el botón es el que dio el usuario (HeyGen: máx. 3 previsualizaciones/día).
+    (async () => {
+      const st = scriptState(msg.text);
+      if (st !== "ok") throw new Error(`el guion no coincide con la narración (${st}); no pulso reproducir para no gastar una previsualización`);
+      const hit = findPlayButton();
+      if (!hit) throw new Error("no encuentro el botón de reproducir de la voz; no pulso nada");
+      if (hit.how !== "selector" && !msg.allowFallback) throw new Error("no encuentro el botón de reproducir en su sitio (selector del usuario); no pulso nada para no gastar una previsualización");
+      const at = Date.now();
+      const p = await clickPlay();
+      return { ok: true, ...p, clickedAt: at };
+    })().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
   if (msg.type === "HG_MEDIA") { sendResponse({ ok: true, items: mediaSince(msg.since || 0) }); return false; }
