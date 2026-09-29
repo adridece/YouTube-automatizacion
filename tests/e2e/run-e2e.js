@@ -119,6 +119,13 @@ const SCENARIOS = {
     u2: "noMenuDownload=1&placeholderTile=1", u3: "noMenuDownload=1",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true, logHas: ["Plan B: guardo directamente la fuente del vídeo"] },
   },
+  voice: {
+    desc: "VOZ (HeyGen): el kit trae narración; en la pestaña de HeyGen se borra el guion viejo, se escribe la narración, se pulsa reproducir y el audio nuevo se guarda como audio.mp3 en la carpeta del lote",
+    askWhereToSave: true, dest: "folder", heygen: true,
+    narration: "En 1998 un chico de barrio soñaba con jugar en el estadio. Nadie creía en él. Y entonces llegó su noche.",
+    u2: "", u3: "",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: [...FILES, "audio.mp3"], logHas: ["Voz guardada"] },
+  },
   agentreply: {
     desc: "El Agent contesta con una pregunta en vez de generar: a los 3 min sin actividad se apunta su respuesta y se reintenta solo",
     askWhereToSave: true, dest: "folder", timeoutMin: 9,
@@ -156,7 +163,7 @@ async function runScenario(name, sc, server) {
   const chrome = spawn(CHROME, [
     `--user-data-dir=${prof}`, "--no-sandbox", "--no-first-run", "--no-default-browser-check",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--disable-features=DisableLoadExtensionCommandLineSwitch",
-    "--remote-debugging-port=9333", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443", "--ignore-certificate-errors",
+    "--remote-debugging-port=9333", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443", "--ignore-certificate-errors",
     "--no-proxy-server", "--window-size=1400,900", "about:blank",
   ], { stdio: "ignore" });
   let browser;
@@ -187,6 +194,7 @@ async function runScenario(name, sc, server) {
     };
     const u2 = await openBg(`https://flow.google.com/u/2/project/aaa?${sc.u2}`);
     const u3 = await openBg(`https://flow.google.com/u/3/project/bbb?${sc.u3}`);
+    const hg = sc.heygen ? await openBg("https://app.heygen.com/create-v4/4585a5a3482e49fea0fef3496df511e4?vt=l&panel=scene&subPanel=voice") : null;
     await sleep(1500);
     const vis = [await u2.evaluate(() => document.visibilityState), await u3.evaluate(() => document.visibilityState)];
     console.log("  visibilidad de las pestañas de Flow al empezar:", vis.join(", "));
@@ -200,7 +208,7 @@ async function runScenario(name, sc, server) {
       await panel.reload();
     }
     await panel.bringToFront();
-    await panel.fill("#prompts", fs.readFileSync(path.join(ROOT, "examples", "sample-kit.txt"), "utf8"));
+    await panel.fill("#prompts", (sc.narration ? `## 🎙️ NARRACIÓN\n\`\`\`\n${sc.narration}\n\`\`\`\n\n` : "") + fs.readFileSync(path.join(ROOT, "examples", "sample-kit.txt"), "utf8"));
     await panel.fill("#accA_num", "2");
     await panel.fill("#accA_range", "1-2");
     await panel.selectOption("#accA_res", "1080p");
@@ -248,7 +256,9 @@ async function runScenario(name, sc, server) {
         await sleep(400);
         await u2.screenshot({ path: path.join(OUT, `flow-panel-pagina-${name}.png`) });
       }
-      if (b2 && b3 && b2.status !== "running" && b3.status !== "running" && (!sc.reloadU2WhenApproved || reloaded)) break;
+      let voiceDone = true;
+      if (sc.heygen) { const lg = (await panel.evaluate(() => chrome.storage.local.get("fbrLog"))).fbrLog || []; voiceDone = lg.some((e) => /Voz guardada|No pude generar\/guardar la voz/.test(e.msg)); }
+      if (b2 && b3 && b2.status !== "running" && b3.status !== "running" && (!sc.reloadU2WhenApproved || reloaded) && voiceDone) break;
       await sleep(1500);
     }
     const { fbrLog } = await panel.evaluate(() => chrome.storage.local.get("fbrLog"));
@@ -310,8 +320,16 @@ async function runScenario(name, sc, server) {
     const names = Object.keys(files).sort();
     check(`archivos en ${sc.dest === "folder" ? "la carpeta elegida" : "Descargas/MundoFutFlow/<lote>"}: ${E.files.join(", ")}`, JSON.stringify(names) === JSON.stringify([...E.files].sort()), JSON.stringify(files));
     // Cada vídeo simulado pesa 350000 + nº de SU escena (los que ya existían, 350000).
+    const vids = names.filter((f) => /_\d{3}\.mp4$/.test(f));
     const sizeOk = (f) => files[f] === (sc.genMode === "downloadTest" ? 350000 : 350000 + parseInt(f.match(/_(\d{3})\./)[1], 10));
-    if (names.length) check("cada archivo es el vídeo de SU escena (no cruzados)", names.every(sizeOk), names.map((f) => `${f}=${files[f]}`).join(" "));
+    if (vids.length) check("cada archivo es el vídeo de SU escena (no cruzados)", vids.every(sizeOk), vids.map((f) => `${f}=${files[f]}`).join(" "));
+    if (sc.heygen) {
+      const hgState = await hg.evaluate(() => ({ text: document.getElementById("script").innerText.replace(/\s+/g, " ").trim(), played: +(sessionStorage.getItem("hgPlayed") || 0) }));
+      const want = sc.narration.replace(/\s+/g, " ").trim();
+      check("HeyGen: guion reemplazado por la narración del kit (sin el texto viejo)", hgState.text === want, JSON.stringify(hgState.text.slice(0, 80)));
+      check("HeyGen: reproducir pulsado una vez", hgState.played === 1, `${hgState.played}`);
+      check("audio.mp3 en la carpeta del lote y es el del texto nuevo", files["audio.mp3"] === 200000 + want.length, `audio.mp3=${files["audio.mp3"]} (esperado ${200000 + want.length})`);
+    }
     check('ningún diálogo "Guardar como" pendiente', stuck.length === 0, `${downloads.length} descargas vistas, ${stuck.length} atascadas`);
     if (name === "folder" || name === "resume") check("sin ERRORes falsos en el log", !/ERROR: Chrome interrumpió/.test(logTxt));
     check("nunca se cambió la vista a una pestaña de Flow", !flowWentActive);
@@ -349,11 +367,17 @@ async function main() {
       if (m) { res.setHeader("Content-Type", "video/mp4"); return res.end(Buffer.alloc(350000 + parseInt(m[1], 10), 7)); }
       res.statusCode = 404; return res.end();
     }
+    if ((req.headers.host || "").startsWith("app.heygen.com")) {
+      const m = req.url.match(/^\/tts\/[^?]+\.mp3\?chars=(\d+)/);
+      if (m) { res.setHeader("Content-Type", "audio/mpeg"); return res.end(Buffer.alloc(200000 + parseInt(m[1], 10), 9)); }
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.end(fs.readFileSync(path.join(__dirname, "mock-heygen.html")));
+    }
     if (req.url.startsWith("/vendor-prosemirror.js")) { res.setHeader("Content-Type", "text/javascript"); return res.end(fs.readFileSync(path.join(__dirname, "vendor-prosemirror.js"))); }
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));
