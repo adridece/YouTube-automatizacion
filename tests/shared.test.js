@@ -274,3 +274,22 @@ test("audioExtFromMime", () => {
   assert.strictEqual(S.audioExtFromMime("", "https://x/y/a.m4a?sig=1"), "m4a");
   assert.strictEqual(S.audioExtFromMime("", ""), "mp3");
 });
+
+test("voz (v2.9.4): la petición con id= es la voz; appear/disappear_v1.webm no", () => {
+  const items = [
+    { url: "https://static.heygen.ai/ui/appear_v1.webm", mime: "video/webm", fromCache: true },
+    { url: "https://static.heygen.ai/ui/disappear_v1.webm", mime: "video/webm", fromCache: true },
+    { url: "https://resource2.heygen.ai/audio/preview?id=98f62577-89f0-49aa-bb00-112233445566", mime: "audio/mpeg" },
+  ];
+  assert.strictEqual(S.pickVoiceMedia(items).url, items[2].url);
+  assert.strictEqual(S.pickVoiceMedia(items.slice(0, 2)), null, "solo animaciones de la interfaz → ninguna");
+  assert.ok(S.isHeygenUiMedia("https://x/appear_v1.webm"));
+  assert.ok(!S.isHeygenUiMedia("https://x/y?id=98f62577-89f0"));
+});
+
+test("contentRangeIsFull", () => {
+  assert.ok(S.contentRangeIsFull("bytes 0-90399/90400", 90400));
+  assert.ok(!S.contentRangeIsFull("bytes 0-65535/90400", 65536));
+  assert.ok(!S.contentRangeIsFull("bytes 100-90399/90400", 90300));
+  assert.ok(S.contentRangeIsFull(null, 5));
+});

@@ -544,3 +544,43 @@ function audioExtFromMime(mime, url) {
   const u = String(url || "").toLowerCase().match(/\.(mp3|wav|m4a|aac|ogg|opus|webm)(\?|$)/);
   return u ? (u[1] === "aac" ? "m4a" : u[1] === "opus" ? "ogg" : u[1]) : "mp3";
 }
+
+// --- Qué petición "media" es la VOZ (v2.9.4) -----------------------------
+// Captura real del usuario (29 sep 2026): tras pulsar reproducir, la red de
+// HeyGen muestra appear_v1.webm y disappear_v1.webm (animaciones de la
+// interfaz, desde caché) y la voz: una URL con "id=<uuid>", 206, ~90 kB.
+function isHeygenUiMedia(url) {
+  return /\/(appear|disappear)_v\d+\.webm(\?|$)/i.test(String(url || "")) || /\.(webm|mp4)(\?|$)/i.test(String(url || "").split("#")[0]) && !/[?&]id=/.test(String(url || ""));
+}
+// Puntuación de una petición media como candidata a ser la voz (0 = no vale).
+function voiceMediaScore(m) {
+  const url = String((m && m.url) || "");
+  const mime = String((m && m.mime) || "").toLowerCase();
+  if (!url || /^data:/.test(url) || isHeygenUiMedia(url)) return 0;
+  if (m.fromCache) return 0;
+  let score = 1;
+  if (/[?&]id=[0-9a-f-]{8,}/i.test(url)) score += 4;
+  if (/^audio\//.test(mime)) score += 3;
+  if (/\.(mp3|wav|m4a|aac|ogg|opus)(\?|$)/i.test(url)) score += 2;
+  if (/^video\//.test(mime)) score -= 1;
+  return Math.max(score, 0);
+}
+function pickVoiceMedia(items) {
+  let best = null;
+  let bestScore = 0;
+  for (const m of items || []) {
+    const s = voiceMediaScore(m);
+    if (s > bestScore) { best = m; bestScore = s; }
+  }
+  return best;
+}
+// ¿Una respuesta 206 trae el archivo ENTERO? "bytes 0-90399/90400" con 90400 bytes → sí.
+function contentRangeIsFull(header, len) {
+  if (!header) return true;
+  const m = String(header).match(/bytes\s+(\d+)-(\d+)\/(\d+|\*)/i);
+  if (!m) return true;
+  const start = +m[1], end = +m[2], total = m[3] === "*" ? null : +m[3];
+  if (start !== 0) return false;
+  if (total != null && end + 1 !== total) return false;
+  return len == null || len === end + 1;
+}

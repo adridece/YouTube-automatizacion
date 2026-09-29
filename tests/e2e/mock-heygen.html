@@ -37,6 +37,9 @@ const P = new URLSearchParams(location.search);
 // SIM (prueba real v2.9.1): HeyGen muestra el guion con SU formato (comillas
 // tipográficas, espacios duros…), así que el texto no es idéntico al pegado.
 const ed = document.getElementById("script");
+// Como HeyGen real: el guion se guarda en el proyecto (sobrevive a recargar).
+if (sessionStorage.getItem("hgScript")) ed.innerHTML = sessionStorage.getItem("hgScript");
+new MutationObserver(() => sessionStorage.setItem("hgScript", ed.innerHTML)).observe(ed, { childList: true, subtree: true, characterData: true });
 let fmtT = null;
 ed.addEventListener("input", () => {
   // writeBroken=1: el guion no acepta el texto nuevo (vuelve al viejo).
@@ -48,16 +51,34 @@ ed.addEventListener("input", () => {
     if (f !== txt) ed.innerHTML = f.split(/\n+/).map((l) => `<p>${l.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</p>`).join("");
   }, 300);
 });
+// SIM de la red real (captura del usuario, 29 sep 2026): al pulsar reproducir
+// salen appear_v1.webm y disappear_v1.webm (animaciones de la interfaz) y,
+// cuando HeyGen termina, la VOZ: "…?id=<uuid>" en otro dominio, 206 (rango).
+const uuid = () => "98f62577-89f0-49" + Math.random().toString(16).slice(2, 14);
+function uiAnim(name) { const v = document.createElement("video"); v.muted = true; v.src = `/ui/${name}`; document.body.appendChild(v); v.play().catch(() => {}); }
+function playVoice(id, chars) {
+  const a = document.createElement("audio");
+  a.src = `https://resource2.heygen.ai/v1/voice?id=${id}&chars=${chars}`;
+  document.body.appendChild(a);
+  a.play().catch(() => {});
+}
 document.getElementById("play").addEventListener("click", async () => {
   const text = document.getElementById("script").innerText.replace(/\s+/g, " ").trim();
   sessionStorage.setItem("hgPlayed", String(+(sessionStorage.getItem("hgPlayed") || 0) + 1));
   sessionStorage.setItem("hgText", text);
+  uiAnim("appear_v1.webm");
+  const id = uuid();
+  sessionStorage.setItem("hgVoice", JSON.stringify({ id, chars: text.length }));
   await new Promise((r) => setTimeout(r, +(P.get("ttsMs") || 1500))); // SIM: HeyGen genera la voz
-  const a = document.createElement("audio");
-  a.src = `/tts/${Math.random().toString(36).slice(2)}.mp3?chars=${text.length}`;
-  document.body.appendChild(a);
-  a.play().catch(() => {});
+  uiAnim("disappear_v1.webm");
+  // audioOnReload=1: la voz no sale en la red hasta que se recarga la página.
+  if (!P.get("audioOnReload")) playVoice(id, text.length);
 });
+// Al recargar, HeyGen carga la última voz generada (lo que contó el usuario).
+if (P.get("audioOnReload") && sessionStorage.getItem("hgVoice")) {
+  const v = JSON.parse(sessionStorage.getItem("hgVoice"));
+  setTimeout(() => playVoice(v.id, v.chars), 800);
+}
 </script>
 </body>
 </html>
