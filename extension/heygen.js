@@ -152,6 +152,9 @@ async function writeScript(text) {
 
 // -------------------------------------------------------- BOTÓN REPRODUCIR
 const PLAY_SELECTORS = [
+  // El del usuario (29 sep 2026, v2.9.7): "… > div:nth-child(1) > button" (play y parar), sin clases css-xxxx.
+  "div.tw-h-\\[168px\\] > div.tw-border-b.tw-border-line.tw-pb-2 > div.tw-relative.tw-flex.tw-flex-row.tw-items-center.tw-gap-3 > div:nth-child(1) > button",
+  "div.tw-border-b.tw-border-line.tw-pb-2 > div.tw-relative.tw-flex.tw-flex-row.tw-items-center.tw-gap-3 > div:nth-child(1) > button",
   // El del usuario (29 sep 2026, v2.9.1: termina en "> button"), sin las clases css-xxxx.
   "div.tw-h-\\[168px\\] > div.tw-border-b.tw-border-line.tw-pb-2 > div.tw-relative.tw-flex.tw-flex-row.tw-items-center.tw-gap-3 > div:nth-child(1) > div > button",
   "div.tw-border-b.tw-border-line.tw-pb-2 > div.tw-relative.tw-flex.tw-flex-row.tw-items-center.tw-gap-3 > div:nth-child(1) > div > button",
@@ -220,8 +223,19 @@ function blobToBase64(blob) {
   });
 }
 
+// SEGUNDO PLANO (igual que en Flow): mientras la extensión trabaja aquí, la
+// página "cree" estar visible y sus animaciones/fotogramas avanzan aunque el
+// usuario mire otra pestaña (page-hook.js, mundo de la página).
+let awakeTimer = null;
+function setAwake(on) {
+  document.dispatchEvent(new CustomEvent(on ? "fbr-bg-on" : "fbr-bg-off"));
+  clearInterval(awakeTimer);
+  awakeTimer = on ? setInterval(() => document.dispatchEvent(new CustomEvent("fbr-tick")), 500) : null;
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.target === "offscreen") return false;
+  if (msg.type === "HG_AWAKE") { setAwake(!!msg.on); sendResponse({ ok: true, visible: document.visibilityState }); return false; }
   if (msg.type === "HG_PING") { sendResponse({ ok: true, url: location.href, hasEditor: !!findEditor(), hasPlay: !!findPlayButton() }); return false; }
   if (msg.type === "HG_WRITE") {
     // Solo escribe (NO pulsa play): pulsar play gasta una previsualización.

@@ -32,6 +32,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const EXT_ID = [...crypto.createHash("sha256").update(EXT).digest("hex").slice(0, 32)].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join("");
 
 const SCEN = {
+  voicebg: { voice: true, arm: true, desc: "VOZ con la pestaña de HeyGen OCULTA (el usuario en otra) y PREPARADA (cereza): HeyGen solo reacciona con fotogramas y la voz sale al parar" },
+  voicebgnoarm: { voice: true, arm: false, desc: "VOZ con HeyGen OCULTA y SIN preparar: el modo «despierto» (page-hook) debe bastar para que reproduzca" },
   normal: { desc: "Flow en pestañas de fondo; el usuario en otra pestaña", u2: "", u3: "", range: ["1-2", "3"], expectPlanB: false },
   raf: { desc: 'Fondo + la lista del "+" solo se pinta con fotogramas (rAF): el modo "despierto" la hace pintarse', u2: "rafList=1", u3: "rafList=1", range: ["1-2", "3"], expectPlusMenu: true },
   stall: { desc: 'Problemas reales del usuario: vídeo atascado al "100%" y caja de prompt sin pintar mientras la pestaña está oculta', u2: "hiddenStall=1&lazyPanel=1", u3: "hiddenStall=1&lazyPanel=1", range: ["1-2", "3"], expectPlanB: false, expectNamed: true },
@@ -68,7 +70,7 @@ async function run(name, sc) {
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--disable-features=DisableLoadExtensionCommandLineSwitch",
     // Simula el clic del usuario en la cereza (permiso de captura) — solo para pruebas.
     ...(sc.arm ? [`--allowlisted-extension-id=${EXT_ID}`] : []),
-    "--remote-debugging-port=9336", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443", "--ignore-certificate-errors",
+    "--remote-debugging-port=9336", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443, MAP resource2.heygen.ai 127.0.0.1:8443", "--ignore-certificate-errors",
     "--no-proxy-server", "--window-size=1300,900", "about:blank",
   ], { stdio: "ignore" });
   try {
@@ -149,12 +151,109 @@ async function run(name, sc) {
   return results;
 }
 
+// VOZ en segundo plano de verdad: la pestaña de HeyGen se abre DE FONDO y
+// nadie la mira (el panel es la pestaña activa). Solo narración en el kit.
+async function runVoiceBg(name, sc) {
+  console.log(`\n=== Segundo plano "${name}": ${sc.desc}`);
+  const results = [];
+  const check = (label, ok, detail) => { results.push(ok); console.log(`  ${ok ? "✅" : "❌"} ${label}${detail ? " — " + detail : ""}`); };
+  const prof = path.join(TMP, `profile-bg-${name}`);
+  fs.rmSync(prof, { recursive: true, force: true });
+  fs.mkdirSync(path.join(prof, "Default"), { recursive: true });
+  const chrome = spawn(CHROME, [
+    `--user-data-dir=${prof}`, "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required",
+    `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--disable-features=DisableLoadExtensionCommandLineSwitch",
+    ...(sc.arm ? [`--allowlisted-extension-id=${EXT_ID}`] : []),
+    "--remote-debugging-port=9336", "--host-resolver-rules=MAP flow.google.com 127.0.0.1:8443, MAP app.heygen.com 127.0.0.1:8443, MAP resource2.heygen.ai 127.0.0.1:8443", "--ignore-certificate-errors",
+    "--no-proxy-server", "--window-size=1300,900", "about:blank",
+  ], { stdio: "ignore" });
+  try {
+    let ver;
+    for (let i = 0; i < 60 && !ver; i++) { try { ver = await getJson("http://127.0.0.1:9336/json/version"); } catch (e) { await sleep(250); } }
+    const cdp = await Cdp.connect(ver.webSocketDebuggerUrl);
+    const { targetId } = await cdp.send("Target.createTarget", { url: `chrome-extension://${EXT_ID}/sidepanel.html` });
+    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    const ev = async (expr) => {
+      const r = await cdp.send("Runtime.evaluate", { expression: `(async () => { ${expr} })()`, awaitPromise: true, returnByValue: true }, sessionId);
+      if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception ? r.exceptionDetails.exception.description : r.exceptionDetails.text);
+      return r.result.value;
+    };
+    await sleep(1500);
+    await ev(`const root = await navigator.storage.getDirectory(); await fbrSetRootHandle(await root.getDirectoryHandle("Escritorio", { create: true })); location.reload();`).catch(() => {});
+    await sleep(1500);
+    await ev(`await chrome.tabs.create({ url: "https://app.heygen.com/create-v4/4585a5a3482e49fea0fef3496df511e4?vt=l&panel=scene&subPanel=voice&audioOnPause=1&needsFrames=1", active: false });`);
+    await sleep(3000);
+    const vis0 = await ev(`const [t] = await chrome.tabs.query({ url: "https://app.heygen.com/*" }); const r = await chrome.scripting.executeScript({ target: { tabId: t.id }, func: () => document.visibilityState }); return r[0].result;`);
+    if (sc.arm) {
+      const r = await ev(`const [t] = await chrome.tabs.query({ url: "https://app.heygen.com/*" }); return await chrome.runtime.sendMessage({ type: "ARM_TAB", tabId: t.id });`);
+      console.log("  preparar HeyGen:", JSON.stringify(r));
+      await sleep(1000);
+    }
+    const narration = "Esta voz se genera con la pestaña de HeyGen oculta, sin mirarla.";
+    await ev(`
+      const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); };
+      set("prompts", ""); set("narration", ${JSON.stringify(narration)});
+      document.querySelector('input[name=dest][value=folder]').checked = true;
+      const gm = document.getElementById("genMode"); gm.value = "paired"; gm.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 800));
+      document.getElementById("start").click();
+      await new Promise((r) => setTimeout(r, 600));
+      if (!document.getElementById("startMsg").hidden) document.getElementById("start").click();`);
+    const t0 = Date.now();
+    let vs = {};
+    let hgActive = false;
+    while (Date.now() - t0 < 4 * 60000) {
+      await sleep(2000);
+      const st = await ev(`const d = await chrome.storage.local.get("fbrVoice"); const act = await chrome.tabs.query({ active: true }); return { v: d.fbrVoice || {}, act: act.map((t) => t.url) };`);
+      vs = st.v;
+      if (st.act.some((u) => u.includes("heygen"))) hgActive = true;
+      if (vs.status === "done" || vs.status === "error") break;
+    }
+    const log = await ev(`return (await chrome.storage.local.get("fbrLog")).fbrLog.map((e) => formatLogEntry(e)).join("\\n");`);
+    fs.writeFileSync(path.join(OUT, `log-bg-${name}.txt`), log + "\n");
+    const hg = await ev(`const [t] = await chrome.tabs.query({ url: "https://app.heygen.com/*" }); const r = await chrome.scripting.executeScript({ target: { tabId: t.id }, func: () => ({ played: +(sessionStorage.getItem("hgPlayed") || 0), pauses: +(sessionStorage.getItem("hgPauses") || 0), atPlay: sessionStorage.getItem("hgText") || "" }) }); return r[0].result;`);
+    const folder = (log.match(/Carpeta del lote: (\S+)/) || [])[1];
+    const files = await ev(`const out = {}; try { const root = await navigator.storage.getDirectory(); const d = await (await root.getDirectoryHandle("Escritorio")).getDirectoryHandle(${JSON.stringify("__F__")}.replace("__F__", ${JSON.stringify(folder || "x")})); for await (const [n, h] of d.entries()) out[n] = (await h.getFile()).size; } catch (e) {} return out;`);
+    console.log(`  (${Math.round((Date.now() - t0) / 1000)} s · log en tests/e2e/.out/log-bg-${name}.txt)`);
+    check("la pestaña de HeyGen estaba OCULTA al empezar", vis0 === "hidden", vis0);
+    check("nunca se cambió la vista a HeyGen", !hgActive);
+    check("play pulsado UNA vez y parado UNA vez", hg.played === 1 && hg.pauses === 1, `play=${hg.played} parar=${hg.pauses}`);
+    check("el panel dice «Voz terminada» con el archivo", vs.status === "done" && /audio\.mp3$/.test(vs.file || ""), `${vs.status} · ${vs.msg} · ${vs.file || ""}`);
+    check("audio.mp3 guardado y es el del texto", files["audio.mp3"] === 200000 + hg.atPlay.length, JSON.stringify(files));
+  } finally {
+    chrome.kill();
+    await sleep(800);
+  }
+  return results;
+}
+
 (async () => {
   const key = path.join(TMP, "key.pem"), cert = path.join(TMP, "cert.pem");
   if (!fs.existsSync(cert)) execSync(`openssl req -x509 -newkey rsa:2048 -nodes -keyout ${key} -out ${cert} -days 30 -subj /CN=flow.google.com 2>/dev/null`);
   const mock = fs.readFileSync(path.join(__dirname, "mock-flow.html"));
   const video = Buffer.alloc(350000, 7);
   const server = https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, (req, res) => {
+    const sendRange = (buf, type) => {
+      res.setHeader("Content-Type", type);
+      res.setHeader("Accept-Ranges", "bytes");
+      const r = /bytes=(\d+)-(\d*)/.exec(req.headers.range || "");
+      if (!r) return res.end(buf);
+      const start = +r[1], end = r[2] ? Math.min(+r[2], buf.length - 1) : buf.length - 1;
+      res.statusCode = 206;
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${buf.length}`);
+      return res.end(buf.subarray(start, end + 1));
+    };
+    const host = req.headers.host || "";
+    if (host.startsWith("resource2.heygen.ai")) {
+      const m = req.url.match(/^\/v1\/voice\?id=[0-9a-f-]+&chars=(\d+)/);
+      if (m) return sendRange(Buffer.alloc(200000 + parseInt(m[1], 10), 9), "audio/mpeg");
+      res.statusCode = 404; return res.end();
+    }
+    if (host.startsWith("app.heygen.com")) {
+      if (req.url.startsWith("/ui/")) return sendRange(Buffer.alloc(6000, 3), "video/webm");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.end(fs.readFileSync(path.join(__dirname, "mock-heygen.html")));
+    }
     if (req.url.startsWith("/video.mp4")) {
       // Cada vídeo pesa 350000 + nº de su escena: así se comprueba que cada archivo es el de SU escena.
       const sc = (req.url.match(/[?&]scene=(\d{3})/) || [])[1];
@@ -173,7 +272,7 @@ async function run(name, sc) {
   }).listen(8443);
   const all = [];
   try {
-    for (const n of (process.env.FBR_BG || "trusted,capture,normal,raf,stall,retry,pm,sendenter").split(",")) all.push(...(await run(n, SCEN[n])));
+    for (const n of (process.env.FBR_BG || "trusted,capture,normal,raf,stall,retry,pm,sendenter,voicebg,voicebgnoarm").split(",")) all.push(...(await (SCEN[n].voice ? runVoiceBg(n, SCEN[n]) : run(n, SCEN[n]))));
   } finally {
     server.close();
   }

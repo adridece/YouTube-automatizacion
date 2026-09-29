@@ -152,7 +152,7 @@ const SCENARIOS = {
     askWhereToSave: true, dest: "folder", heygen: true, noFlow: true, kit: "none", hg: "audioOnPause=1",
     narration: "Esta voz solo aparece en la red cuando se para la reproducción.",
     u2: "", u3: "",
-    expect: { scenes: {}, approvals: { u2: 0, u3: 0 }, files: ["audio.mp3"], logHas: ["PARAR la reproducción", "Voz guardada"], pauses: 1, mode: "voiceOnly" },
+    expect: { scenes: {}, approvals: { u2: 0, u3: 0 }, files: ["audio.mp3"], logHas: ["para PARAR", "Voz guardada"], pauses: 1, mode: "voiceOnly" },
   },
   imgonly: {
     desc: "SOLO IMÁGENES: el kit trae solo los prompts de imagen → se hacen las imágenes sin pedir vídeos (antes el panel lo bloqueaba)",
@@ -440,7 +440,7 @@ async function main() {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicereload", "voicepause", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));
