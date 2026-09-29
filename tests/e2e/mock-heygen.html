@@ -62,7 +62,17 @@ function playVoice(id, chars) {
   document.body.appendChild(a);
   a.play().catch(() => {});
 }
+let playing = null; // { id, chars } mientras "suena"
 document.getElementById("play").addEventListener("click", async () => {
+  if (playing) {
+    // Segundo clic = PARAR (no es otra previsualización).
+    sessionStorage.setItem("hgPauses", String(+(sessionStorage.getItem("hgPauses") || 0) + 1));
+    const v = playing;
+    playing = null;
+    // audioOnPause=1 (como el HeyGen del usuario): la voz sale en la red al parar.
+    if (P.get("audioOnPause")) playVoice(v.id, v.chars);
+    return;
+  }
   const text = document.getElementById("script").innerText.replace(/\s+/g, " ").trim();
   sessionStorage.setItem("hgPlayed", String(+(sessionStorage.getItem("hgPlayed") || 0) + 1));
   sessionStorage.setItem("hgText", text);
@@ -71,8 +81,10 @@ document.getElementById("play").addEventListener("click", async () => {
   sessionStorage.setItem("hgVoice", JSON.stringify({ id, chars: text.length }));
   await new Promise((r) => setTimeout(r, +(P.get("ttsMs") || 1500))); // SIM: HeyGen genera la voz
   uiAnim("disappear_v1.webm");
-  // audioOnReload=1: la voz no sale en la red hasta que se recarga la página.
-  if (!P.get("audioOnReload")) playVoice(id, text.length);
+  playing = { id, chars: text.length };
+  // audioOnReload=1: la voz no sale en la red hasta que se recarga la página;
+  // audioOnPause=1: solo sale al pulsar otra vez (parar).
+  if (!P.get("audioOnReload") && !P.get("audioOnPause")) playVoice(id, text.length);
 });
 // Al recargar, HeyGen carga la última voz generada (lo que contó el usuario).
 if (P.get("audioOnReload") && sessionStorage.getItem("hgVoice")) {

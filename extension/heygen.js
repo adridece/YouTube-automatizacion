@@ -232,6 +232,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
+  if (msg.type === "HG_TOGGLE") {
+    // PARAR la reproducción (mismo botón). Receta del usuario (29 sep 2026):
+    // play → ~10 s sonando → volver a pulsar para parar → la voz sale en Network.
+    // Parar no gasta previsualización.
+    (async () => {
+      const hit = findPlayButton();
+      if (!hit) throw new Error("no encuentro el botón de reproducir para pararlo");
+      const p = await clickPlay();
+      return { ok: true, ...p };
+    })().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
   if (msg.type === "HG_PLAY_ONCE") {
     // Pulsa reproducir UNA vez, y solo si el guion es exactamente la narración
     // y el botón es el que dio el usuario (HeyGen: máx. 3 previsualizaciones/día).
