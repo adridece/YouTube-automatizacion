@@ -126,7 +126,7 @@ chrome.action.onClicked.addListener(async (tab) => {
   // Se llama a open() sin esperar a nada antes: Chrome exige que sea
   // inmediato tras el clic.
   const opening = sidePanelSupported() ? chrome.sidePanel.open({ windowId: tab.windowId }) : Promise.reject(new Error("este navegador no tiene panel lateral para extensiones"));
-  if (/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || "")) {
+  if (/^https:\/\/(flow\.google\.com|labs\.google|app\.heygen\.com)\//.test(tab.url || "")) {
     armTab(tab.id).then((r) => {
       if (!r.ok) blog("warn", `No pude preparar la pestaña de ${r.acc || "Flow"} para segundo plano: ${r.error}`, { acc: r.acc || null, phase: "setup" });
       chrome.runtime.sendMessage({ type: "ARMED_EVENT", ok: r.ok, already: !!r.already, acc: r.acc, error: r.error || null }).catch(() => {});
@@ -268,8 +268,9 @@ async function isArmed(tabId) {
 }
 async function armTab(tabId, quiet) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || "")) return { ok: false, error: "no es una pestaña de Flow" };
-  const acc = getFlowAccountKey(tab.url);
+  const isHeygen = !!(tab && /^https:\/\/app\.heygen\.com\//.test(tab.url || ""));
+  if (!tab || (!isHeygen && !/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || ""))) return { ok: false, error: "no es una pestaña de Flow ni de HeyGen" };
+  const acc = isHeygen ? "heygen" : getFlowAccountKey(tab.url);
   if (await isArmed(tabId)) return { ok: true, acc, already: true };
   if (!chrome.tabCapture || !chrome.tabCapture.getMediaStreamId) return { ok: false, acc, error: "este navegador no permite a las extensiones capturar pestañas" };
   let streamId;
@@ -815,6 +816,14 @@ async function runVoiceInner(v) {
   }
   chrome.tabs.update(tabId, { autoDiscardable: false }).catch(() => {});
   vlog("info", `Voz: uso la pestaña de HeyGen (${(tab.url || "").split("?")[0]}). Escribo la narración (${v.text.split(/\s+/).length} palabras).`);
+  // Segundo plano, igual que Flow: pestaña capturada (Chrome la trata como
+  // visible), foco simulado (depurador) y página "despierta" (page-hook).
+  let armed = await isArmed(tabId);
+  if (!armed) armed = (await armTab(tabId, true)).ok;
+  if (!armed) vlog("warn", "La pestaña de HeyGen NO está preparada para segundo plano: si no la miras, puede que no reproduzca la voz. Entra en ella y pulsa la cereza (o Alt+Shift+C) una vez, como en Flow.");
+  else vlog("info", "Pestaña de HeyGen preparada para segundo plano ✓ (funciona aunque mires otra pestaña).");
+  await dbgEnsure(tabId).catch(() => {});
+  await sendToHeygen(tabId, { type: "HG_AWAKE", on: true }).catch(() => {});
 
   // 1) ESCRIBIR (se puede repetir: no gasta nada).
   await setVoiceState({ msg: "Escribiendo la narración en el guion…" });
@@ -849,6 +858,7 @@ async function runVoiceInner(v) {
     vlog("warn", `No pude escuchar la red de HeyGen con el depurador (${e.message}); busco el audio en la propia página.`);
   }
   const cleanup = async () => {
+    await sendToHeygen(tabId, { type: "HG_AWAKE", on: false }).catch(() => {});
     if (netMedia.has(tabId)) {
       await chrome.debugger.sendCommand({ tabId }, "Fetch.disable", {}).catch(() => {});
       netMedia.delete(tabId);
@@ -933,33 +943,18 @@ async function runVoiceInner(v) {
     vlog("info", `Botón de reproducir pulsado UNA vez (${p.real ? "clic real" : "clic normal"}). Espero el audio (id=…) sin volver a pulsar…`);
     await setVoiceState({ msg: "Generando la voz en HeyGen…" });
 
-    // 4) Esperar la voz. Si en 90 s no aparece, RECARGAR la página de HeyGen
-    //    (idea del usuario: al recargar, el audio ya generado sale en la red).
-    //    Recargar no gasta previsualizaciones; nunca se vuelve a pulsar play.
-    // Receta del usuario (29 sep 2026): dejarlo sonar ~10 s y volver a pulsar
-    // el mismo botón para PARARLO; entonces la voz aparece en Network → Media.
+    // 4) Receta del usuario (29 sep 2026): dejarlo sonar ~10 s y volver a
+    //    pulsar el MISMO botón para PARARLO; entonces la voz aparece en
+    //    Network → Media ("id=…"). Parar no gasta previsualización; nunca se
+    //    vuelve a pulsar play para generar otra vez, y no hace falta recargar.
     let found = await waitVoice(since, 10, "Tras pulsar reproducir");
     if (!found) {
       const t = await sendToHeygen(tabId, { type: "HG_TOGGLE" }).catch((e) => ({ ok: false, error: e.message }));
-      vlog("info", t && t.ok ? "Han pasado 10 s sonando: vuelvo a pulsar el botón para PARAR la reproducción (no gasta previsualización), así la voz aparece en la red." : `No pude pulsar para parar la reproducción (${(t && t.error) || "sin respuesta"}).`);
+      vlog("info", t && t.ok ? `Han pasado 10 s sonando: pulso otra vez el botón para PARAR (${t.real ? "clic real" : "clic normal"}; no gasta previsualización), así la voz aparece en la red.` : `No pude pulsar para parar la reproducción (${(t && t.error) || "sin respuesta"}).`);
       await setVoiceState({ msg: "Parando la reproducción y recogiendo el audio…" });
-      found = await waitVoice(since, 80, "Tras parar la reproducción");
+      found = await waitVoice(since, 90, "Tras parar la reproducción");
     }
-    const tryReload = async (why) => {
-      vlog("info", `${why} Recargo la página de HeyGen para que cargue el audio ya generado (no gasta previsualizaciones)…`);
-      await setVoiceState({ msg: "Recargando HeyGen para recoger el audio…" });
-      const since2 = Date.now();
-      await chrome.tabs.reload(tabId, { bypassCache: true }).catch(() => {});
-      for (let i = 0; i < 60; i++) {
-        const t = await chrome.tabs.get(tabId).catch(() => null);
-        if (t && t.status === "complete") break;
-        await new Promise((res) => setTimeout(res, 1000));
-      }
-      await listen().catch(() => {});
-      return waitVoice(since2, 120, "Tras recargar");
-    };
-    if (!found) found = await tryReload(`Tras reproducir y parar, la voz no apareció en la red (vi: ${describe(seen(since)) || "nada"}).`);
-    if (!found) return { ok: false, error: `pulsé reproducir una vez y recargué la página, pero no apareció el audio (id=…) en la red. No vuelvo a pulsar para no gastar otra previsualización. Pásame el log.` };
+    if (!found) return { ok: false, error: `pulsé reproducir, esperé 10 s y la paré, pero no apareció el audio (id=…) en la red (vi: ${describe(seen(since)) || "nada"}). No vuelvo a pulsar para no gastar otra previsualización. Pásame el log.` };
     vlog("info", `Voz detectada (${found.via || "red"}): ${found.url.slice(0, 100)}${found.url.length > 100 ? "…" : ""} · ${found.status || "?"}${found.mime ? " · " + found.mime : ""}`);
     await setVoiceState({ msg: "Guardando el audio…" });
 
@@ -970,11 +965,7 @@ async function runVoiceInner(v) {
       } catch (e) {
         lastErr = e.message;
         vlog("warn", `Voz: guardar el audio, intento ${attempt}/3: ${e.message}`);
-        if (attempt === 2) {
-          // Última idea: recargar y recoger la copia interceptada de la carga nueva.
-          const again = await tryReload("No pude leer el audio.");
-          if (again) found = again;
-        } else await new Promise((res) => setTimeout(res, 3000));
+        await new Promise((res) => setTimeout(res, 3000));
       }
     }
     return { ok: false, error: `el audio se generó pero no pude guardarlo: ${lastErr}` };

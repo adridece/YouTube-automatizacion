@@ -133,9 +133,9 @@ async function refreshArmed() {
 // para trabajar en segundo plano (Chrome solo lo permite tras pulsar la cereza en ella).
 async function armActiveFlowTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || "")) return;
+  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google|app\.heygen\.com)\//.test(tab.url || "")) return;
   const r = await chrome.runtime.sendMessage({ type: "ARM_TAB", tabId: tab.id }).catch(() => null);
-  if (r && r.ok && !r.already) toast(`Pestaña ${r.acc.replace("u", "/u/")}/ lista: seguirá trabajando aunque mires otra`);
+  if (r && r.ok && !r.already) toast(r.acc === "heygen" ? "Pestaña de HeyGen lista: la voz se hará aunque mires otra pestaña" : `Pestaña ${r.acc.replace("u", "/u/")}/ lista: seguirá trabajando aunque mires otra`);
   else if (r && !r.ok && r.error) toast(`No pude preparar esta pestaña: ${r.error}`);
   await refreshArmed();
 }
@@ -182,7 +182,8 @@ function refreshDerived() {
     if (animations.size && noAnim.length) chips.push(`<span class="warn">${icon("alert", 13)}sin animación: ${noAnim.map(pad3).join(", ")}</span>`);
   }
   const narr = narrationOf(f);
-  if (narr) chips.push(`<span class="${heygenTab ? "ok" : "warn"}">${icon(heygenTab ? "check" : "alert", 13)}voz: ${narr.split(/\s+/).length} palabras${heygenTab ? " · HeyGen abierto" : " · abre HeyGen"}</span>`);
+  const hgArmed = !!(heygenTab && armedTabs[heygenTab.id]);
+  if (narr) chips.push(`<span class="${heygenTab && hgArmed ? "ok" : "warn"}">${icon(heygenTab && hgArmed ? "check" : "alert", 13)}voz: ${narr.split(/\s+/).length} palabras${!heygenTab ? " · abre HeyGen" : hgArmed ? " · HeyGen listo (2.º plano)" : " · pulsa 🍒 en la pestaña de HeyGen"}</span>`);
   if (images.size || animations.size || narr) {
     const em = effectiveMode(f, images, animations, narr);
     chips.push(`<span>${icon("arrow", 13)}se hará: ${MODE_TEXT[em] || em}${narr && em !== "voiceOnly" && heygenTab && !["dryRun", "downloadTest", "sendTest"].includes(em) ? " + voz" : ""}</span>`);
@@ -348,6 +349,7 @@ $("start").addEventListener("click", async () => {
   const notArmed = accs.filter((a) => { const t = flowTabs.find((x) => getFlowAccountKey(x.url) === a.accountKey); return !t || !armedTabs[t.id]; });
   const warns = [];
   if (notArmed.length) warns.push(`Sin preparar para segundo plano: ${notArmed.map((a) => a.accountKey.replace("u", "/u/") + "/").join(", ")}. Entra en esa pestaña y pulsa la cereza una vez; si no, Flow puede pararse cuando no la mires.`);
+  if (narration && heygenTab && !armedTabs[heygenTab.id]) warns.push("La pestaña de HeyGen no está preparada para segundo plano: entra en ella y pulsa la cereza una vez (como en Flow); si no, puede que la voz no se reproduzca cuando no la mires.");
   if (!voiceOnly && narration && !heygenTab) warns.push("Hay narración pero no hay ninguna pestaña de HeyGen abierta: NO se generará la voz (audio.mp3). Abre tu proyecto de HeyGen si la quieres.");
   if (warns.length && !startAnyway) {
     startAnyway = true;

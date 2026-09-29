@@ -73,6 +73,9 @@ document.getElementById("play").addEventListener("click", async () => {
     if (P.get("audioOnPause")) playVoice(v.id, v.chars);
     return;
   }
+  // needsFrames=1: como muchas webs, no hace nada hasta el siguiente fotograma
+  // (requestAnimationFrame): con la pestaña oculta y sin preparar, nunca llega.
+  if (P.get("needsFrames")) await new Promise((r) => requestAnimationFrame(r));
   const text = document.getElementById("script").innerText.replace(/\s+/g, " ").trim();
   sessionStorage.setItem("hgPlayed", String(+(sessionStorage.getItem("hgPlayed") || 0) + 1));
   sessionStorage.setItem("hgText", text);

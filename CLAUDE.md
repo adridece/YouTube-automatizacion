@@ -102,7 +102,8 @@ sin foco → v2.4: rotación de formas de escribir/enviar. **Prueba real v2.4.0*
   nombre (el Agent renombra mal los vídeos). Se descarga **en cuanto aparece**, y nunca hay dos vídeos generándose a la vez.
 - **Nunca enviar un prompt de vídeo sin comprobar que su imagen quedó adjunta** (podría cobrar un vídeo sin referencia).
 - **HeyGen: pulsar reproducir UNA sola vez por lote** (máx. 3 previsualizaciones al día): nunca reintentar el clic. A los 10 s se pulsa
-  el mismo botón UNA vez para parar (así sale la voz en la red; parar no gasta).
+  el mismo botón UNA vez para parar (así sale la voz en la red; parar no gasta). Sin recargar. HeyGen se prepara para
+  segundo plano igual que Flow (cereza en su pestaña, depurador, page-hook): prueba con `npm run e2e:bg` (`voicebg`).
 - **Todo fallo que no cuesta puntos se reintenta solo** (segunda vuelta, F5 automático): el usuario no quiere resolver nada a mano.
 - **Descargas de una en una** para toda la extensión, asociadas a su escena en `background.js`; se comprueba el nombre final.
 - Las esperas usan `waitFor` (despierta con el DOM y con el latido del background): no uses `setInterval`/`sleep` fijos para esperar a Flow.
