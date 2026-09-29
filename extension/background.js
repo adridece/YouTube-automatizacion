@@ -298,7 +298,7 @@ const dbgTabs = new Set();
 async function dbgEnsure(tabId) {
   if (!chrome.debugger) throw new Error("este navegador no permite chrome.debugger");
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google)\//.test(tab.url || "")) throw new Error("solo se usa en pestañas de Flow");
+  if (!tab || !/^https:\/\/(flow\.google\.com|labs\.google|app\.heygen\.com)\//.test(tab.url || "")) throw new Error("solo se usa en pestañas de Flow y de HeyGen");
   if (!dbgTabs.has(tabId)) {
     try {
       await chrome.debugger.attach({ tabId }, "1.3");
@@ -332,6 +332,14 @@ async function dbgClick(tabId, x, y) {
   await dbgCmd(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
   await dbgCmd(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
   await dbgCmd(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+}
+async function dbgSelectAllDelete(tabId) {
+  const a = { key: "a", code: "KeyA", windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 };
+  await dbgCmd(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...a, modifiers: 2, commands: ["selectAll"] });
+  await dbgCmd(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...a, modifiers: 2 });
+  const b = { key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 };
+  await dbgCmd(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...b });
+  await dbgCmd(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...b });
 }
 async function dbgEnter(tabId) {
   const k = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
@@ -420,6 +428,8 @@ async function runPlan(plan) {
   plan.pending = plan.steps.map((s) => s.accountKey);
   plan.results = {};
   await setPlan(plan);
+  // La voz (HeyGen) va a la vez que Flow, en su propia pestaña.
+  if (plan.voice && plan.voice.text) runVoice(plan.voice).catch((e) => vlog("error", `Error inesperado generando la voz: ${e.message}`));
   if (plan.parallel) {
     for (const s of plan.steps) {
       const ok = await launchStep(s);
@@ -656,6 +666,183 @@ async function jobStatus(jobId) {
   return { status: job.status, result: job.result || null, urlKind: job.urlKind || null, downloadId: job.downloadId, promptWarned: !!job.promptWarned };
 }
 
+// ============================================================ VOZ (HeyGen, v2.9)
+// Petición del usuario (29 sep 2026): con la narración del kit, en la pestaña
+// de HeyGen que tiene abierta con su voz: borrar el guion, escribir la
+// narración, pulsar reproducir, y guardar el NUEVO "media" que aparece en
+// DevTools → Network → Media como audio.mp3 en la carpeta del lote.
+// Aquí se hace lo mismo que DevTools: el depurador (Network) de ESA pestaña.
+function vlog(level, msg) { blog(level, msg, { phase: "voice" }); }
+
+async function findHeygenTab() {
+  const tabs = await chrome.tabs.query({ url: "https://app.heygen.com/*" });
+  return tabs.find((t) => /\/create/.test(t.url || "")) || tabs[0] || null;
+}
+async function sendToHeygen(tabId, msg) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, msg);
+  } catch (e) {
+    if (!/Receiving end does not exist|Could not establish connection/i.test(String(e && e.message))) throw e;
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["heygen.js"] });
+    await new Promise((r) => setTimeout(r, 500));
+    return await chrome.tabs.sendMessage(tabId, msg);
+  }
+}
+
+// Peticiones de audio/vídeo vistas por el depurador en cada pestaña.
+const netMedia = new Map(); // tabId -> Map(requestId -> {url, type, mime, status, t, finished})
+if (chrome.debugger) {
+  chrome.debugger.onEvent.addListener((src, method, params) => {
+    const list = netMedia.get(src.tabId);
+    if (!list) return;
+    if (method === "Network.requestWillBeSent") {
+      const r = params.request || {};
+      if (params.type === "Media" || /\.(mp3|wav|m4a|aac|ogg|opus)(\?|$)/i.test(r.url || "")) {
+        list.set(params.requestId, { url: r.url, type: params.type, mime: "", status: 0, t: Date.now(), finished: false });
+      }
+    } else if (method === "Network.responseReceived") {
+      const r = params.response || {};
+      const known = list.get(params.requestId);
+      if (known || params.type === "Media" || /^audio\//i.test(r.mimeType || "")) {
+        list.set(params.requestId, { ...(known || { t: Date.now(), finished: false }), url: r.url, type: params.type, mime: r.mimeType || "", status: r.status || 0 });
+      }
+    } else if (method === "Network.loadingFinished") {
+      const known = list.get(params.requestId);
+      if (known) known.finished = true;
+    }
+  });
+}
+
+function b64Chunks(b64, size) {
+  const out = [];
+  const step = size - (size % 4);
+  for (let i = 0; i < b64.length; i += step) out.push(b64.slice(i, i + step));
+  return out.length ? out : [""];
+}
+// Guarda bytes (base64) en la carpeta elegida o en Descargas/MundoFutFlow.
+async function saveVoiceBytes(b64, mime, relPath, destMode) {
+  if (destMode === "folder") {
+    const jobId = `voz-${Date.now()}`;
+    const parts = b64Chunks(b64, 4 * 1024 * 1024);
+    let last = null;
+    for (let i = 0; i < parts.length; i++) {
+      last = await offscreenCall({ type: "FS_CHUNK", jobId, index: i, last: i === parts.length - 1, relPath, mime, data: parts[i] });
+      if (!last || !last.ok) throw new Error((last && last.error) || "el escritor de archivos no respondió");
+    }
+    return last.path || relPath;
+  }
+  await ownDownload(`data:${mime || "audio/mpeg"};base64,${b64}`, relPath);
+  return `Descargas/MundoFutFlow/${relPath}`;
+}
+
+async function runVoice(v) {
+  const tab = await findHeygenTab();
+  if (!tab) {
+    vlog("error", "No hay ninguna pestaña de HeyGen abierta: no puedo generar la voz. Abre tu proyecto de HeyGen (app.heygen.com/create-v4/…, panel de voz) y vuelve a lanzar solo la voz o el lote.");
+    notify("Voz: falta la pestaña de HeyGen", "Abre tu proyecto de HeyGen para generar audio.mp3.", true);
+    return;
+  }
+  const tabId = tab.id;
+  if (tab.discarded || tab.status !== "complete") {
+    // Chrome la había "dormido" (ahorro de memoria) o aún carga: se recarga y se espera.
+    if (tab.discarded) await chrome.tabs.reload(tabId).catch(() => {});
+    for (let i = 0; i < 60; i++) {
+      const t = await chrome.tabs.get(tabId).catch(() => null);
+      if (t && t.status === "complete" && !t.discarded) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    await new Promise((r) => setTimeout(r, 4000));
+  }
+  vlog("info", `Voz: uso la pestaña de HeyGen (${(tab.url || "").split("?")[0]}). Escribo la narración (${v.text.split(/\s+/).length} palabras) y pulso reproducir.`);
+  chrome.tabs.update(tabId, { autoDiscardable: false }).catch(() => {});
+  try {
+    await dbgEnsure(tabId);
+    netMedia.set(tabId, new Map());
+    await chrome.debugger.sendCommand({ tabId }, "Network.enable", {});
+    // Que el audio no salga de la caché: así siempre hay una petición nueva.
+    await chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: true }).catch(() => {});
+  } catch (e) {
+    vlog("warn", `No pude activar el depurador en HeyGen (${e.message}); busco el audio por otras vías.`);
+  }
+  let saved = null;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3 && !saved; attempt++) {
+    try {
+      if (attempt > 1) {
+        vlog("info", `Voz: reintento ${attempt}/3.`);
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      const since = Date.now();
+      const list = netMedia.get(tabId);
+      if (list) list.clear();
+      const r = await sendToHeygen(tabId, { type: "HG_SPEAK", text: v.text });
+      if (!r || !r.ok) throw new Error((r && r.error) || "la pestaña de HeyGen no respondió");
+      vlog("info", `Narración escrita en el guion y botón de reproducir pulsado${r.realClick ? "" : " (clic normal)"}. Espero el audio nuevo…`);
+      // Espera al NUEVO audio (hasta 2 min: HeyGen lo genera antes de sonar).
+      let found = null;
+      for (let i = 0; i < 120 && !found; i++) {
+        await new Promise((res) => setTimeout(res, 1000));
+        const net = list ? [...list.entries()].filter(([, m]) => m.t >= since - 500 && m.url && !/^data:/.test(m.url)) : [];
+        const audio = net.find(([, m]) => /^audio\//i.test(m.mime)) || net.find(([, m]) => m.type === "Media");
+        if (audio) { found = { requestId: audio[0], ...audio[1], via: "depurador" }; break; }
+        if (i % 3 === 2) {
+          const hm = await sendToHeygen(tabId, { type: "HG_MEDIA", since }).catch(() => null);
+          const it = hm && hm.items && hm.items.find((x) => x.url && !/^data:/.test(x.url));
+          if (it) found = { url: it.url, mime: "", via: it.source };
+        }
+      }
+      if (!found) throw new Error("tras pulsar reproducir no apareció ningún audio nuevo en 2 min");
+      vlog("info", `Audio nuevo detectado (${found.via}): ${found.url.slice(0, 90)}${found.url.length > 90 ? "…" : ""}${found.mime ? ` · ${found.mime}` : ""}`);
+      // Esperar a que termine de cargar si lo vio el depurador.
+      if (found.requestId && list) for (let i = 0; i < 30 && !(list.get(found.requestId) || {}).finished; i++) await new Promise((res) => setTimeout(res, 1000));
+      // Bytes: (1) desde la propia página; (2) del depurador; (3) descarga directa.
+      let bytes = null;
+      const f = await sendToHeygen(tabId, { type: "HG_FETCH", url: found.url }).catch((e) => ({ ok: false, error: e.message }));
+      if (f && f.ok && f.size > 1000) bytes = { b64: f.data, mime: f.mime || found.mime };
+      if (!bytes && found.requestId) {
+        try {
+          const body = await chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", { requestId: found.requestId });
+          const b64 = body.base64Encoded ? body.body : btoa(unescape(encodeURIComponent(body.body)));
+          if (b64.length > 1400 && (found.status === 200 || !found.status)) bytes = { b64, mime: found.mime };
+        } catch (e) {}
+      }
+      const ext = audioExtFromMime(bytes ? bytes.mime : found.mime, found.url);
+      const relPath = `${v.batchFolder}/audio.${ext}`;
+      if (ext !== "mp3") vlog("warn", `El audio de HeyGen es ${ext.toUpperCase()}, no MP3: lo guardo como audio.${ext} (sin convertirlo).`);
+      if (bytes) {
+        saved = await saveVoiceBytes(bytes.b64, bytes.mime || "audio/mpeg", relPath, v.destMode);
+      } else if (/^https:/.test(found.url)) {
+        if (v.destMode === "folder") {
+          const res = await offscreenCall({ type: "FS_SAVE_URL", url: found.url, relPath });
+          if (!res || !res.ok) throw new Error(`no pude leer el audio (${(res && res.error) || "sin respuesta"})`);
+          saved = res.path || relPath;
+        } else {
+          await ownDownload(found.url, relPath);
+          saved = `Descargas/MundoFutFlow/${relPath}`;
+        }
+      } else {
+        throw new Error(`no pude leer el audio (${(f && f.error) || "URL no descargable"})`);
+      }
+    } catch (e) {
+      lastErr = e.message;
+      vlog("warn", `Voz: intento ${attempt}/3 fallido: ${e.message}`);
+    }
+  }
+  if (netMedia.has(tabId)) {
+    netMedia.delete(tabId);
+    chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: false }).catch(() => {});
+  }
+  const running = await getRunningTabs();
+  if (!running[tabId]) await dbgDetach(tabId);
+  if (saved) {
+    vlog("ok", `Voz guardada: ${saved}`);
+    notify("Voz guardada ✅", saved, false);
+  } else {
+    vlog("error", `No pude generar/guardar la voz: ${lastErr}. Pásame el log (y, si puedes, una captura del panel de voz de HeyGen).`);
+    notify("Voz: no se pudo guardar", String(lastErr || "").slice(0, 120), true);
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.target === "offscreen") return false;
   const tabId = sender.tab ? sender.tab.id : null;
@@ -773,6 +960,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try { await dbgClick(tabId, msg.x, msg.y); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
       case "DBG_TYPE":
         try { await dbgCmd(tabId, "Input.insertText", { text: msg.text }); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+      case "DBG_SELECT_ALL_DELETE":
+        try { await dbgSelectAllDelete(tabId); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
       case "DBG_ENTER":
         try { await dbgEnter(tabId); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
       case "OPEN_PANEL":
