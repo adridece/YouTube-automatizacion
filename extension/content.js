@@ -62,6 +62,7 @@ const CONFIG = {
   sentWaitMs: 8 * 60000, // si el mensaje ya se envió/aprobó: la IA piensa o hay cola
   imagesSettleMs: 40000, // el Agent renombra DESPUÉS de terminar (a veces tarda)
   assetListWaitMs: 10000,
+  agentSilentMs: 100000,
   agentReplyIdleMs: 180000, // el Agent contestó y lleva 3 min sin hacer nada → se reintenta
   rateLimitMaxRetries: 4,
   minGapBetweenVideosMs: 20000, // margen mínimo entre un vídeo terminado/fallido y el siguiente envío
@@ -360,6 +361,8 @@ function newVideoTiles(before) {
   return $$(CONFIG.videoTileTag).filter((t) => !before.videoNodes.has(t) && !before.videoKeys.includes(tileKey(t)));
 }
 function tileReady(t) { return !tileLooksInProgress(t.textContent); }
+// terminado DE VERDAD: sin progreso y con miniatura/vídeo (un tile sin miniatura no es un vídeo)
+function tileDone(t) { return tileReady(t) && tileHasMedia(t); }
 function videoTilesByTitle(name) { return $$(CONFIG.videoTileTag).filter((t) => tileTitle(t) === name); }
 
 function imageTilesByLabel(label) {
@@ -617,6 +620,11 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun, onlySend }) {
         const at = tail ? now.lastIndexOf(tail) : -1;
         const reply = (at >= 0 ? now.slice(at + tail.length) : now.slice(-220)).trim().slice(0, 300);
         return { type: "agentReplied", error: `el Agent contestó sin generar nada: «${reply}»` };
+      }
+      // v2.11 (visto en vivo, 30 sep): el Agent puede contestar VACÍO (sin aviso de coste, sin texto,
+      // sin error). No se esperan 8 min: si lleva 100 s sin cambiar nada y sin trabajar, se reintenta.
+      if (Date.now() - stableSince > CONFIG.agentSilentMs && !agentBusyNow()) {
+        return { type: "agentReplied", error: "el Agent no contestó nada (ni aviso de coste ni error) en 100 s" };
       }
       return null;
     };
@@ -910,15 +918,34 @@ function videoSrcOf(tile) {
   const list = [v.currentSrc, v.src, ...$$("source", v).map((x) => x.src)].filter(Boolean);
   return list.find((u) => /^(https:|blob:)/.test(u)) || null;
 }
+// v2.11 (DOM REAL medido el 30 sep 2026): un vídeo TERMINADO no lleva <video>: lleva
+// <img class="thumbnail" alt="Miniatura de vídeo generada" src="https://…">. Mientras
+// se genera (y si falla) el flow-video-tile NO tiene ninguna imagen. Por eso "tiene
+// vídeo" = miniatura con src (o <video> con fuente, por si Flow cambia).
+function tileHasMedia(t) {
+  if (!t) return false;
+  if (videoSrcOf(t)) return true;
+  return $$("img[src]", t).some((i) => /^(https?:|blob:|data:)/.test(i.src || ""));
+}
 // Un tile con vídeo reproducible NUNCA es un error.
-function isErrorTile(t) { return tileLooksFailed(t.textContent || "") && !videoSrcOf(t); }
+function isErrorTile(t) { return tileLooksFailed(t.textContent || "") && !tileHasMedia(t); }
+// Avisos de error de Flow que viven en el chat del Agent: <flow-error-tile> ("Error — Se ha
+// producido un error. Inténtalo de nuevo."). Es independiente del idioma.
+const errorCardCount = () => $$("flow-error-tile").length;
 // v2.10.3 (prueba real: el mismo vídeo generado 4 veces): en Flow real los tiles
 // de vídeo no traen identificador estable y al redibujarse la cuadrícula los
 // tiles VIEJOS parecen nuevos (p. ej. el aviso de error de un fallo anterior).
 // Por eso "salió" / "falló" se decide CONTANDO (un redibujado no cambia la cuenta).
+// good   = vídeos con miniatura (terminados de verdad)
+// err    = avisos de error (tiles de error + tarjetas <flow-error-tile> del chat)
+// stalled= tiles SIN miniatura y sin progreso: con Flow ya sin generar nada, es un fallo silencioso
 function videoCounts() {
   const tiles = $$(CONFIG.videoTileTag).filter((t) => !t.closest(CONFIG.pendingTileTag));
-  return { good: tiles.filter((t) => tileReady(t) && !isErrorTile(t)).length, err: tiles.filter(isErrorTile).length };
+  return {
+    good: tiles.filter((t) => tileReady(t) && tileHasMedia(t) && !isErrorTile(t)).length,
+    err: tiles.filter(isErrorTile).length + errorCardCount(),
+    stalled: tiles.filter((t) => tileReady(t) && !tileHasMedia(t) && !isErrorTile(t)).length,
+  };
 }
 // Pasa el ratón (sintético) por encima del tile: Flow puede cargar el <video> al hacerlo.
 function hoverTile(t) {
@@ -942,6 +969,7 @@ async function waitForSceneVideo(sendRes, maxWaitMs) {
   let lastHover = 0;
   let noSrcLogged = false;
   let failSince = 0;
+  let idleSince = 0;
   const cond = () => {
     rejectStrayCostDialogs("mientras se generaba el vídeo");
     const sig = detectNewSignals(sendRes.textBefore, agentPanelText());
@@ -950,6 +978,7 @@ async function waitForSceneVideo(sendRes, maxWaitMs) {
     if (generating) {
       readyKey = null;
       failSince = 0;
+      idleSince = 0;
       if (Date.now() - lastInProgressNote > 60000) {
         lastInProgressNote = Date.now();
         const pct = fresh.map((t) => (t.textContent || "").match(/\d{1,3}\s?%/)).find(Boolean);
@@ -958,42 +987,47 @@ async function waitForSceneVideo(sendRes, maxWaitMs) {
       return null;
     }
     const c = videoCounts();
-    // ¿Hay un vídeo bueno MÁS que antes de enviar? → salió (aunque también haya avisos).
-    // v2.10.6: si el Agent dice que se bloqueó / falló y el "vídeo nuevo" no
-    // tiene vídeo reproducible, NO es un vídeo: es el aviso (se trata como fallo).
+    // ¿Hay un vídeo bueno (CON MINIATURA) MÁS que antes de enviar? → salió.
+    // v2.11 (DOM real): un tile sin miniatura NUNCA es un vídeo (es el provisional o un fallo).
     const agentSaysFail = sig.policy || sig.genError;
-    const readyNew = fresh.filter((t) => tileReady(t) && !isErrorTile(t));
-    const trustNew = !agentSaysFail || readyNew.some((t) => videoSrcOf(t));
-    if (c.good > base.good && trustNew) {
+    const readyNew = fresh.filter((t) => tileReady(t) && tileHasMedia(t) && !isErrorTile(t));
+    const trustNew = !agentSaysFail || readyNew.length > 0;
+    if (c.good > base.good && trustNew && readyNew.length) {
       failSince = 0;
-      const ready = agentSaysFail ? readyNew.filter((t) => videoSrcOf(t)) : readyNew;
-      if (!ready.length) { readyKey = null; return null; }
-      const pick = pickNewVideoKey(ready.map(tileKey), []);
-      const el = ready.find((t) => tileKey(t) === pick.key);
+      idleSince = 0;
+      const pick = pickNewVideoKey(readyNew.map(tileKey), []);
+      const el = readyNew.find((t) => tileKey(t) === pick.key);
       if (!el) return null;
       if (pick.key !== readyKey) { readyKey = pick.key; readySince = Date.now(); return null; }
-      const src = videoSrcOf(el);
-      if (!src) {
-        if (Date.now() - lastHover > 5000) { lastHover = Date.now(); hoverTile(el); }
-        if (!noSrcLogged && Date.now() - readySince > 20000) { noSrcLogged = true; log("info", `El vídeo nuevo aún no muestra su fuente (dice: «${tileText(el)}»); espero a que Flow lo termine del todo…`); }
-      }
-      const need = src ? 5000 : 45000;
-      if (Date.now() - readySince < need) return null;
-      return { key: pick.key, el, ambiguous: pick.ambiguous, count: ready.length };
+      // la miniatura aparece unos segundos ANTES de que Flow dé el vídeo por terminado: margen corto
+      if (Date.now() - readySince < 4000) return null;
+      return { key: pick.key, el, ambiguous: pick.ambiguous, count: readyNew.length };
     }
     readyKey = null;
-    // Sin vídeo nuevo: ¿hay señal de fallo NUEVA? (más avisos de error que antes,
-    // o el Agent lo dice). Se CONFIRMA durante un rato antes de darlo por fallido,
-    // por si el vídeo aparece: nunca se repite un vídeo que sí salió.
-    const hint = sig.policy ? "policy" : c.err > base.err ? "genError" : sig.genError ? "genError" : null;
-    if (!hint) { failSince = 0; return null; }
-    const confirmMs = hint === "policy" ? 30000 : 60000;
+    // Sin vídeo nuevo: ¿hay señal de fallo NUEVA? Se CONFIRMA unos segundos antes de darlo por
+    // fallido (por si el vídeo aparece): nunca se repite un vídeo que sí salió.
+    //  - policy: el Agent dice que lo bloqueó la política
+    //  - card: <flow-error-tile> nuevo en el chat, o tile de error nuevo
+    //  - stalled: Flow ya no genera nada y quedó un tile SIN miniatura (fallo silencioso)
+    //  - agent: el Agent dice que no pudo
+    //  - silent: Flow lleva 90 s sin generar nada y sin aviso alguno
+    const baseStalled = base.stalled || 0;
+    const hint = sig.policy ? "policy" : c.err > base.err ? "card" : c.stalled > baseStalled ? "stalled" : sig.genError ? "genError" : null;
+    let kind = hint;
+    if (!kind) {
+      failSince = 0;
+      if (!idleSince) idleSince = Date.now();
+      if (Date.now() - idleSince < 90000) return null;
+      kind = "silent";
+    }
+    const confirmMs = kind === "policy" ? 12000 : kind === "card" || kind === "stalled" ? 20000 : kind === "silent" ? 0 : 30000;
     if (!failSince) {
       failSince = Date.now();
-      log("info", `Parece que Flow no pudo generar el vídeo (${hint === "policy" ? "bloqueo por políticas" : c.err > base.err ? "aviso de error nuevo en la cuadrícula" : "el Agent dice que no se pudo generar"}). Lo compruebo durante ${confirmMs / 1000} s antes de reintentar, por si el vídeo aparece.`);
+      const why = { policy: "bloqueo por políticas", card: "aviso de error de Flow", stalled: "el vídeo quedó sin miniatura", genError: "el Agent dice que no se pudo generar", silent: "Flow lleva 90 s sin generar nada ni avisar" }[kind];
+      log("info", `Parece que Flow no pudo generar el vídeo (${why}). Lo compruebo durante ${Math.round(confirmMs / 1000)} s antes de reintentar, por si el vídeo aparece.`);
     }
     if (Date.now() - failSince < confirmMs) return null;
-    return { error: hint };
+    return { error: kind === "policy" ? "policy" : "genError" };
   };
   let r = await tryWait(cond, maxWaitMs, "el vídeo nuevo");
   // Si se acaba la espera pero Flow sigue visiblemente generando (cola), se
@@ -1024,7 +1058,7 @@ function lateVideoForScene(n) {
   const othersDone = batch.order.filter((m) => m !== n && batch.scenes[m].doneAt && batch.scenes[m].doneAt > s.lastSendAt).length;
   if (videoCounts().good <= s.lastSendGood + othersDone) return null;
   const others = batch.order.filter((m) => m !== n).map((m) => batch.scenes[m].videoKey).filter(Boolean);
-  return freshVideoTiles(s.lastSendKeys, others).filter((t) => tileReady(t) && !isErrorTile(t))[0] || null;
+  return freshVideoTiles(s.lastSendKeys, others).filter((t) => tileDone(t) && !isErrorTile(t))[0] || null;
 }
 
 async function processSceneVideo(n, cfg, maxWaitMs, pass) {
@@ -1167,7 +1201,7 @@ async function processSceneVideo(n, cfg, maxWaitMs, pass) {
           if (v.ambiguous) log("warn", `Aparecieron ${v.count} vídeos nuevos terminados a la vez; asigno a esta escena el más reciente. Revisa que sea el correcto.`);
           videoElByScene.set(n, v.el);
           await setStep(n, "video", "done", { videoKey: v.key, error: null, failKind: null, doneAt: Date.now() });
-          log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s${videoSrcOf(v.el) ? "" : " (el tile aún no muestra su fuente de vídeo)"}.`);
+          log("ok", `Vídeo generado en ${Math.round((Date.now() - t0) / 1000)} s.`);
           if (!keyIsStable(v.key)) log("info", `Aviso técnico: el tile de este vídeo no trae un identificador estable (${v.key.split(":")[0]}); lo descargo ya para no perderlo.`);
           outcome = "done";
         } else if (v.error === "timeout") {
@@ -1287,6 +1321,21 @@ async function settleBeforeSend(cfg, maxWaitMs) {
 // enviar el 1.º"): antes de CADA envío de vídeo, (1) un margen mínimo desde el
 // último vídeo (terminado o fallido) y (2) el Agent libre: botón de generar
 // presente y habilitado, y su panel sin cambiar durante 10 s (ya no escribe).
+// v2.11 (DOM REAL, 30 sep 2026): el botón «Iniciar generación» está SIEMPRE deshabilitado con la
+// caja vacía (justo después de enviar), así que "deshabilitado" NO significa "ocupado" (la v2.10
+// esperaba 5 min enteros antes de cada vídeo y de cada reintento por eso). Mientras el Agent
+// trabaja, el botón pasa a ser uno de PARAR (■).
+function agentBusyNow() {
+  if ($$(CONFIG.pendingTileTag).length > ignoredPending) return true;
+  const panel = $(CONFIG.agentPanelSelector);
+  if (!panel) return false;
+  if ($("flow-stop-button", panel)) return true;
+  const btn = $(CONFIG.generateButtonSelector);
+  if (!btn) return true; // el botón de generar no está: lo ha sustituido el de parar
+  const b = btn.tagName === "BUTTON" ? btn : btn.querySelector("button");
+  const label = `${(b && b.getAttribute("aria-label")) || ""} ${(b && b.textContent) || ""}`;
+  return /stop|square|cancel|pause|detener|parar|cancelar|pausar/i.test(label);
+}
 let lastVideoEventAt = 0;
 function markVideoEvent() { lastVideoEventAt = Date.now(); }
 async function waitAgentIdle() {
@@ -1300,15 +1349,14 @@ async function waitAgentIdle() {
   let noted = false;
   const t0 = Date.now();
   const ok = await tryWait(() => {
-    const btn = $(CONFIG.generateButtonSelector);
     const txt = agentPanelText();
     if (txt !== lastText) { lastText = txt; stableSince = Date.now(); }
-    const busy = !btn || isDisabledBtn(btn) || $$(CONFIG.pendingTileTag).length > ignoredPending;
+    const busy = agentBusyNow();
     if (busy) stableSince = Date.now();
     if (!noted && Date.now() - t0 > 20000) { noted = true; log("info", "El Agent de Flow sigue trabajando; espero a que termine antes de enviarle nada…"); }
     return !busy && Date.now() - stableSince >= 10000;
-  }, 5 * 60000, "que el Agent de Flow esté libre");
-  if (!ok) log("warn", "El Agent de Flow no ha quedado libre en 5 min; envío igualmente (no se reenvía nada ya enviado).");
+  }, 3 * 60000, "que el Agent de Flow esté libre");
+  if (!ok) log("warn", "El Agent de Flow no ha quedado libre en 3 min; envío igualmente (no se reenvía nada ya enviado).");
 }
 
 // Al final del lote: un vídeo "a revisar" (coste aprobado pero no apareció a
@@ -1327,7 +1375,7 @@ async function resolveReviewScenes(cfg) {
     await sleep(3000);
   }
   const taken = new Set(batch.order.map((m) => batch.scenes[m].videoKey).filter(Boolean));
-  const orphans = $$(CONFIG.videoTileTag).filter((t) => !t.closest(CONFIG.pendingTileTag) && tileReady(t) && !isErrorTile(t) && !batch.startVideoKeys.includes(tileKey(t)) && !taken.has(tileKey(t)));
+  const orphans = $$(CONFIG.videoTileTag).filter((t) => !t.closest(CONFIG.pendingTileTag) && tileDone(t) && !isErrorTile(t) && !batch.startVideoKeys.includes(tileKey(t)) && !taken.has(tileKey(t)));
   if (orphans.length !== review.length) {
     if (orphans.length) log("warn", `Hay ${orphans.length} vídeo(s) nuevo(s) sin escena y ${review.length} escena(s) a revisar: no los asigno solo para no cruzarlos. Revisa en Flow.`);
     return;
@@ -1356,7 +1404,7 @@ async function resolveReviewScenes(cfg) {
 function sceneVideoCandidates(n) {
   const s = batch.scenes[n];
   const others = batch.order.filter((m) => m !== n).map((m) => batch.scenes[m].videoKey).filter(Boolean);
-  let list = freshVideoTiles(s.beforeVideoKeys || batch.startVideoKeys || [], others).filter((t) => tileReady(t) && !isErrorTile(t));
+  let list = freshVideoTiles(s.beforeVideoKeys || batch.startVideoKeys || [], others).filter((t) => tileDone(t) && !isErrorTile(t));
   const next = batch.order.map((m) => batch.scenes[m]).filter((x) => x !== s && x.sentAt && s.sentAt && x.sentAt > s.sentAt && Array.isArray(x.beforeVideoKeys)).sort((x, y) => x.sentAt - y.sentAt)[0];
   // Con claves provisionales (Flow no da ningún identificador estable), un
   // tile sustituido parece "nuevo": entonces solo vale el más reciente (Flow
@@ -1376,10 +1424,10 @@ function sceneVideoCandidates(n) {
 async function findVideoTileForScene(n) {
   const s = batch.scenes[n];
   const el = videoElByScene.get(n);
-  if (el && el.isConnected && !el.closest(CONFIG.pendingTileTag) && tileReady(el)) return el;
+  if (el && el.isConnected && !el.closest(CONFIG.pendingTileTag) && tileDone(el)) return el;
   const key = s.videoKey;
   if (key) {
-    const byKey = $$(CONFIG.videoTileTag).find((t) => tileKey(t) === key && tileReady(t));
+    const byKey = $$(CONFIG.videoTileTag).find((t) => tileKey(t) === key && tileDone(t));
     if (byKey) { videoElByScene.set(n, byKey); return byKey; }
   }
   const cands = sceneVideoCandidates(n);
@@ -1392,11 +1440,15 @@ async function findVideoTileForScene(n) {
   return cands[0];
 }
 
-async function openDownloadMenu(tile, kind, resolution) {
+// via "right": clic derecho sobre el tile · via "more": botón «Más opciones» (⋮) del propio tile
+// (DOM real: lleva aria-label "Más opciones"). Ambos abren el mismo menú con «Descargar».
+async function openDownloadMenu(tile, kind, resolution, via) {
   await closeOverlays();
   tile.scrollIntoView({ block: "center" });
   await sleep(300);
-  rightClickElement(tile);
+  const moreBtn = via === "more" ? $$("button", tile).find((b) => /m[aá]s opciones|more options|more_vert/i.test(`${b.getAttribute("aria-label") || ""} ${b.textContent}`)) : null;
+  if (via === "more" && !moreBtn) throw new Error('el tile no tiene botón "Más opciones"');
+  if (moreBtn) { hoverTile(tile); clickDeep(moreBtn); } else rightClickElement(tile);
   const dl = await tryWait(() => findMenuItemByText(CONFIG.menuItemText.download), 5000, 'la opción "Descargar"');
   if (!dl) { await closeOverlays(); throw new Error(`no aparece "Descargar" en el menú contextual${visibilityNote()}`); }
   clickDeep(dl);
@@ -1472,10 +1524,10 @@ async function awaitDownloadJob(arm, start) {
   }
 }
 // Método 1 [V en v2.1]: clic derecho → Descargar → resolución.
-async function downloadViaMenu(n, tile, kind, cfg, mode) {
+async function downloadViaMenu(n, tile, kind, cfg, mode, via) {
   const arm = await armDownload(n, sceneRelPath(n, kind, cfg), mode);
   return awaitDownloadJob(arm, async () => {
-    const res = await openDownloadMenu(tile, kind, cfg.resolution);
+    const res = await openDownloadMenu(tile, kind, cfg.resolution, via || "right");
     log("info", `He pedido la descarga (${res}). Espero a que Chrome la registre (Flow prepara el archivo; 1080p puede tardar)…`);
   });
 }
@@ -1533,7 +1585,9 @@ async function downloadScene(n, kind, cfg) {
     // el tile se vuelve a buscar desde cero.
     // v2.10.1: si el menú no entrega nada en 90 s, enseguida la fuente directa
     // (no se tiene a la otra cuenta esperando turno 15 min).
-    const plan = kind === "video" ? ["menu", "source", "menu720", "menu", "source"] : ["menu", "menu", "menu"];
+    // v2.11: el tile real no trae <video>, así que "source" solo sirve si hay fuente; si no, se usa
+    // el botón «Más opciones» del tile ("more") como segunda vía de abrir el mismo menú.
+    const plan = kind === "video" ? ["menu", "more", "source", "menu720", "more"] : ["menu", "more", "menu"];
     const waits = [0, 5000, 10000, 20000, 30000];
     for (let i = 0; i < plan.length; i++) {
       const how = plan[i];
@@ -1547,13 +1601,19 @@ async function downloadScene(n, kind, cfg) {
         const tile = kind === "video" ? await findVideoTileForScene(n) : await findWithScroll(() => findImageTileByLabel(pad3(n)), CONFIG.imageTileTag);
         if (!tile) throw new Error(kind === "video" ? "no encuentro el vídeo de esta escena en la cuadrícula" : "no encuentro la imagen");
         if (kind === "video" && isErrorTile(tile)) { const err = new Error(`el tile de esta escena es un ERROR de Flow, no un vídeo («${tileText(tile)}»)`); err.noRetry = true; throw err; }
-        if (kind === "video" && !videoSrcOf(tile)) { hoverTile(tile); await sleep(1500); }
+        // Un tile de vídeo SIN miniatura no es un vídeo (provisional o fallo): no tiene «Descargar».
+        if (kind === "video" && !tileHasMedia(tile)) {
+          const okMedia = await tryWait(() => tileHasMedia(tile), 45000, "la miniatura del vídeo");
+          if (!okMedia) throw new Error(`el tile de esta escena no tiene vídeo (sin miniatura; dice: «${tileText(tile)}»)`);
+        }
+        if (kind === "video") { hoverTile(tile); await sleep(800); }
+        if (how === "source" && !videoSrcOf(tile)) continue; // sin <video> (lo normal en Flow real) no hay fuente que guardar
         let r;
         if (how === "source") r = await downloadViaSource(n, tile, cfg, destModeCache);
         else {
           const useCfg = how === "menu720" && cfg.resolution !== "720p" ? { ...cfg, resolution: "720p" } : cfg;
           if (useCfg !== cfg) log("warn", "Pido la versión 720p (tamaño original) por si el 1080p es lo que falla.");
-          r = await downloadViaMenu(n, tile, kind, useCfg, destModeCache);
+          r = await downloadViaMenu(n, tile, kind, useCfg, destModeCache, how === "more" ? "more" : "right");
         }
         if (!r.nameOk) {
           await setStep(n, "download", "review", { file: r.path, error: `se guardó con otro nombre: ${r.path}` });
@@ -1573,7 +1633,7 @@ async function downloadScene(n, kind, cfg) {
           send({ type: "NOTIFY", title: "Sin permiso en la carpeta elegida", message: "Guardo en Descargas/MundoFutFlow. Abre el panel de la extensión y pulsa «Conceder acceso» para la próxima vez.", sticky: true });
         }
         const t0 = kind === "video" ? videoElByScene.get(n) : null;
-        log("warn", `Descarga fallida (intento ${i + 1}/${plan.length}, ${how === "source" ? "fuente directa" : "menú"}): ${e.message}${t0 && t0.isConnected && !videoSrcOf(t0) ? ` · el tile no tiene vídeo (dice: «${tileText(t0)}»)` : ""}`);
+        log("warn", `Descarga fallida (intento ${i + 1}/${plan.length}, ${how === "source" ? "fuente directa" : how === "more" ? "botón ⋮" : "menú"}): ${e.message}${t0 && t0.isConnected && !tileHasMedia(t0) ? ` · el tile no tiene vídeo (dice: «${tileText(t0)}»)` : ""}`);
         if (e.noRetry) break;
       }
     }

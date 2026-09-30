@@ -338,3 +338,15 @@ test("v2.10.6: avisos de políticas / fallo (también en inglés) cuentan como f
   assert.ok(S.detectNewSignals("", "We couldn't generate this video.").genError >= 1);
   assert.ok(!S.tileLooksFailed("mundofut_006"));
 });
+
+test("v2.11: la tarjeta real «Se ha producido un error» es fallo de generación y NO se confunde con «demasiado rápido»", () => {
+  const err = S.detectNewSignals("", "Error Se ha producido un error. Inténtalo de nuevo.");
+  assert.ok(err.genError >= 1);
+  assert.strictEqual(err.rateLimit, 0);
+  const rate = S.detectNewSignals("", "Estás preguntando demasiado rápido. Ve más despacio e inténtalo de nuevo.");
+  assert.ok(rate.rateLimit >= 1);
+  assert.strictEqual(rate.genError, 0);
+  assert.ok(S.detectNewSignals("", "An error occurred while generating.").genError >= 1);
+  // un error viejo del historial del chat no cuenta
+  assert.strictEqual(S.detectNewSignals("Se ha producido un error.", "Se ha producido un error.").genError, 0);
+});

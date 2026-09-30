@@ -296,7 +296,7 @@ const FLOW_SIGNALS = {
   // v2.10.6: también en inglés (la cuenta 2 del usuario podría tener Flow en otro idioma) [SUPUESTO la redacción inglesa]
   rateLimit: /preguntando demasiado r[aá]pido|asking too (fast|quickly)|too many requests/gi, // [V] el español
   policy: /bloquead[ao]s? por nuestras pol[ií]ticas|pol[ií]ticas de (seguridad|contenido|uso)|infring\w*|viola\w* (nuestras |las )?pol[ií]ticas|violat\w* (our |the )?(content |safety |usage )?polic\w*|against our (content |safety |usage )?polic\w*|blocked by our|(safety|content|usage) polic(y|ies)/gi, // [V] el primero
-  genError: /no se ha podido generar|couldn.?t (be )?generat\w*|could not (be )?generat\w*|failed to generate|unable to generate/gi, // [V] el primero ("No se te ha cobrado")
+  genError: /no se ha podido generar|se ha producido un error|an error (has )?occurred|something went wrong|couldn.?t (be )?generat\w*|could not (be )?generat\w*|failed to generate|unable to generate/gi, // [V] "No se te ha cobrado" y (30 sep 2026, tarjeta <flow-error-tile> real) "Se ha producido un error. Inténtalo de nuevo."
   cancelled: /he cancelado la generaci[oó]n|cancell?ed the (video )?generation/gi, // [V] el primero
   noPoints: /(no tienes (suficientes )?(puntos|cr[eé]ditos))|(puntos|cr[eé]ditos) insuficientes|sin (puntos|cr[eé]ditos)|has (alcanzado|agotado)[^.]{0,40}(l[ií]mite|puntos|cr[eé]ditos)|l[ií]mite diario/gi, // [SUPUESTO]
 };

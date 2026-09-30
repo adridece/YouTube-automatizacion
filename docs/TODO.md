@@ -1,6 +1,7 @@
 # Pendientes (por prioridad) — actualizado 28 sep 2026 (v2.6.0)
 
 ## P0 — bloquea el uso real
+000000000000. **v2.11 en real** (lote completo): (a) sin esperas de 5 min ("El Agent de Flow sigue trabajando" solo si de verdad trabaja); (b) si un vídeo falla, el log dice «Parece que Flow no pudo generar el vídeo (…)» y a los ≤20 s reintenta; (c) cada vídeo se guarda («Guardado: …_00N.mp4»). Si algo falla: log completo (la extensión lo guarda; también se puede leer del perfil de Chrome). Pedirle además captura del aviso de POLÍTICAS si sale.
 00000000000. **Log de la prueba en que la cuenta 2 no generó ningún vídeo** (y la cuenta 1 no descargó el último): pedirlo entero.
 0000000000. **v2.10.3 en real**: ¿cada vídeo se pide UNA sola vez? En el log: "Aprobar" una vez por escena; si algo falla, "Parece que Flow
           no pudo generar… Lo compruebo durante 60 s" y, si el vídeo aparece, "SÍ se generó… NO lo vuelvo a pedir".

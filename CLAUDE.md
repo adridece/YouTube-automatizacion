@@ -42,8 +42,15 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (29 sep 2026 — v2.10.6, "Cerezium Autopilot")
-v2.10.6 (BUG_HISTORY #83): el aviso de POLÍTICAS de un vídeo ya no cuenta como vídeo generado (cuenta 2: no reintentaba y daba por
+## Estado actual (30 sep 2026 — v2.11.0, "Cerezium Autopilot")
+v2.11.0 (BUG_HISTORY #84, **DOM real inspeccionado en vivo con Claude in Chrome** — ver `docs/FLOW_DOM_FINDINGS.md` "Ciclo de vida REAL"):
+un vídeo terminado = `img.thumbnail` (NO hay `<video>`); un tile sin miniatura nunca es un vídeo; el fallo de Flow es una tarjeta
+`flow-error-tile` en el chat; el botón de generar está deshabilitado con la caja vacía (NO es "ocupado"); el Agent puede contestar vacío.
+e2e nuevos: `realok`, `realfail`, `realpolicy`, `realempty` (`real=1` en el simulador). En macOS el e2e corre con `CHROME_BIN` (Chromium de
+Playwright) y `NODE_PATH` a un Playwright instalado; `xvfb-run` no hace falta. El log persistente de la extensión se puede leer del perfil de
+Chrome (`Local Extension Settings/<id>` → buscar el array JSON de logs).
+
+v2.10.6 (antes; sigue vigente) (BUG_HISTORY #83): el aviso de POLÍTICAS de un vídeo ya no cuenta como vídeo generado (cuenta 2: no reintentaba y daba por
 hecho un vídeo inexistente); señales de Flow también en inglés.
 
 v2.10.5 (BUG_HISTORY #82): el aviso de coste se reconoce en varios idiomas (la cuenta 2 no lo aprobaba); si no se reconoce, el log lo dice.
