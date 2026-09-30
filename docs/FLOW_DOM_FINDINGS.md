@@ -178,3 +178,9 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 - **[V]** El Agent puede contestar **VACÍO** (solo los iconos de valorar) tras un envío: sin aviso de coste ni error.
 - **[V]** «Iniciar generación» (`flow-generate-icon-button > button[type=submit]`) está `disabled` siempre que la caja esté vacía: NO es señal de "ocupado". Mientras el Agent trabaja se ve ■ (selector exacto del botón de parar: [SUPUESTO], la extensión lo detecta por icono/etiqueta stop/parar/cancelar/pausar).
 - **[SUPUESTO]** El aspecto exacto del aviso por POLÍTICAS (en la prueba real se detectó por el texto del Agent, no por DOM).
+
+## Fallo por POLÍTICAS y submenú de descarga (medido en vivo el 30 sep 2026, cuenta 2 sin PRO)
+- **[V]** Un vídeo bloqueado por políticas deja en la CUADRÍCULA un `flow-video-tile` que contiene un `flow-error-tile` («Error — Esta petición podría infringir nuestras políticas sobre la generación de contenido relacionado con personas famosas. Prueba con otra petición o envíanos tus comentarios.»), **sin miniatura**, con un botón de reintento; y la misma tarjeta en el chat. Su menú contextual SÍ trae «Descargar» (no entrega nada). El Agent, aun así, escribe «Your video has been scheduled and is waiting in the queue…» (falso).
+- **[V]** Submenú «Descargar» de la cuenta SIN PRO: «270p GIF animado», «720p Tamaño original» (activo), «1080p Resolución mejorada · Actualizar» y «4K … Actualizar» **DESHABILITADOS**. En la cuenta PRO el 1080p sí se descarga (log real). La extensión salta las opciones deshabilitadas (v2.12.1).
+- **[V]** Mientras el Agent trabaja, el botón de enviar pasa a mostrar el icono `stop` (textContent «stop»).
+- **[SUPUESTO]** Por qué en la cuenta 2 el menú de un vídeo "terminado" (con miniatura) no mostró «Descargar» durante 2 min (escena 6 del lote de las 22:38); sin reproducir. La v2.12.1 escribe en el log qué opciones tenía el menú y el estado del tile.

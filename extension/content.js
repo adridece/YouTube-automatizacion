@@ -1539,11 +1539,19 @@ async function openDownloadMenu(tile, kind, resolution, via) {
   if (via === "more" && !moreBtn) throw new Error('el tile no tiene botón "Más opciones"');
   if (moreBtn) { hoverTile(tile); clickDeep(moreBtn); } else rightClickElement(tile);
   const dl = await tryWait(() => findMenuItemByText(CONFIG.menuItemText.download), 5000, 'la opción "Descargar"');
-  if (!dl) { await closeOverlays(); throw new Error(`no aparece "Descargar" en el menú contextual${visibilityNote()}`); }
+  if (!dl) {
+    // v2.12.1: qué había de verdad (la cuenta 2 del usuario falló aquí y no se pudo ver por qué)
+    const items = $$(CONFIG.menuItemSelector, $(CONFIG.overlayContainerSelector) || document.createElement("div")).map((e) => (e.textContent || "").replace(/\s+/g, " ").trim().slice(0, 24));
+    const diag = `menú con [${[...new Set(items)].join(" | ") || "nada"}] · tile: ${tileHasMedia(tile) ? "con miniatura" : "SIN miniatura"}${tile.isConnected ? "" : " · DESCONECTADO"} · «${tileText(tile).slice(0, 50)}»`;
+    await closeOverlays();
+    throw new Error(`no aparece "Descargar" en el menú contextual (${diag})${visibilityNote()}`);
+  }
   clickDeep(dl);
   const options = resolutionFallbacks(resolution, kind);
+  // v2.12.1 (DOM real, cuenta sin PRO): «1080p/4K … Actualizar» están DESHABILITADOS; solo «720p Tamaño original» sirve.
+  const disabledItem = (el) => !!el && (el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true" || !!$$("button", el).some((b) => b.disabled) || /actualizar|upgrade/i.test(el.textContent || ""));
   for (let i = 0; i < options.length; i++) {
-    const opt = await tryWait(() => findMenuItemByText(options[i]), i === 0 ? 5000 : 1500, `la opción ${options[i]}`);
+    const opt = await tryWait(() => { const it = findMenuItemByText(options[i]); return it && !disabledItem(it) ? it : null; }, i === 0 ? 5000 : 1500, `la opción ${options[i]} (activa)`);
     if (opt) {
       if (i > 0) log("warn", `No existe la opción ${options[0]} en esta cuenta; uso ${options[i]}.`);
       clickDeep(opt);
@@ -1677,7 +1685,7 @@ async function downloadScene(n, kind, cfg) {
     // v2.11: el tile real no trae <video>, así que "source" solo sirve si hay fuente; si no, se usa
     // el botón «Más opciones» del tile ("more") como segunda vía de abrir el mismo menú.
     const plan = kind === "video" ? ["menu", "more", "source", "menu720", "more"] : ["menu", "more", "menu"];
-    const waits = [0, 5000, 10000, 20000, 30000];
+    const waits = [0, 8000, 20000, 45000, 90000]; // v2.12.1: más margen por si Flow aún termina el vídeo
     for (let i = 0; i < plan.length; i++) {
       const how = plan[i];
       try {
