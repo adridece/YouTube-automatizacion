@@ -125,6 +125,18 @@ const SCENARIOS = {
     u2: "", u3: "videoErrorTile=8",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 9 }, files: FILES, logHas: ["Segunda vuelta automática"] },
   },
+  newproject: {
+    desc: "v2.12: al lanzar el lote la extensión abre un proyecto NUEVO en cada cuenta (home → «Nuevo proyecto») y pone sola imagen/vídeo 9:16, x1, Omni 1.1 Flash y confirmar=Siempre (el simulador los trae en 16:9 x2 y Veo); además borra el progreso del lote anterior",
+    askWhereToSave: true, dest: "folder", timeoutMin: 7, newProject: true, seedStale: true,
+    u2: "real=1&vidModel=veo", u3: "real=1&vidModel=veo",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true, settings: true, staleReset: true, logHas: ["Abro un proyecto nuevo de Flow", "Ajustes del proyecto nuevo"] },
+  },
+  armall: {
+    desc: "v2.12: «preparar todas las pestañas a la vez» al abrir la extensión (Flow u/2, u/3) y el lote sigue funcionando",
+    askWhereToSave: true, dest: "folder", timeoutMin: 6, armAll: true,
+    u2: "real=1", u3: "real=1",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true },
+  },
   realok: {
     desc: "DOM REAL (30 sep): vídeo = <img class=thumbnail> sin <video>, provisional sin imagen, botón de generar deshabilitado con la caja vacía → NO se espera al Agent de más, cada vídeo se descarga al generarse con su escena",
     askWhereToSave: true, dest: "folder", timeoutMin: 6,
@@ -292,9 +304,9 @@ async function runScenario(name, sc, server) {
     const panel = await ctx.newPage();
     await panel.setViewportSize({ width: 400, height: 1000 });
     await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
-    // v2.6: el icono abre la ventanita típica (el panel lateral estrechaba Flow).
-    const popup = await panel.evaluate(async () => { for (let i = 0; i < 20; i++) { const p = await chrome.action.getPopup({}); if (p) return p; await new Promise((r) => setTimeout(r, 200)); } return ""; });
-    check("el icono abre la ventanita de extensión (no el panel lateral)", /sidepanel\.html\?modo=popup$/.test(popup), popup);
+    // v2.12: el icono abre la ventana lateral (la del botón ↗): sin popup ni panel estrecho.
+    const ui = await panel.evaluate(async () => { for (let i = 0; i < 20; i++) { const m = (await chrome.storage.local.get("fbrUiMode")).fbrUiMode; if (m) return { m, p: await chrome.action.getPopup({}) }; await new Promise((r) => setTimeout(r, 200)); } return {}; });
+    check("el icono abre la ventana lateral (sin popup ni panel estrecho)", ui.m === "ventana" && ui.p === "", JSON.stringify(ui));
     const openBg = async (url) => {
       const wait = ctx.waitForEvent("page", (p) => p.url().startsWith(url.split("?")[0]) || p.url() === "about:blank");
       await panel.evaluate((u) => chrome.tabs.create({ url: u, active: false }), url);
@@ -307,6 +319,18 @@ async function runScenario(name, sc, server) {
     const hg = sc.heygen ? await openBg(`https://app.heygen.com/create-v4/4585a5a3482e49fea0fef3496df511e4?vt=l&panel=scene&subPanel=voice${sc.hg ? "&" + sc.hg : ""}`) : null;
     const mu = sc.mureka ? await openBg("https://www.mureka.ai/create") : null;
     await sleep(1500);
+    if (sc.armAll) {
+      // v2.12: al abrir la extensión se intentan preparar TODAS las pestañas a la vez.
+      const r = await panel.evaluate(() => chrome.runtime.sendMessage({ type: "ARM_ALL" }));
+      console.log("  ARM_ALL →", JSON.stringify({ total: r.total, armed: (r.armed || []).map((a) => a.acc), failed: (r.failed || []).map((f) => `${f.acc}: ${String(f.error).slice(0, 90)}`) }));
+      // v2.12: la ventana lateral (icono/↗) se abre pegada a la derecha con el ancho esperado
+      const ow = await panel.evaluate(async () => { const r = await chrome.runtime.sendMessage({ type: "OPEN_PANEL" }); await new Promise((x) => setTimeout(x, 800)); const ws = (await chrome.windows.getAll({ populate: true })).filter((w) => w.tabs.some((t) => /sidepanel\.html\?modo=ventana/.test(t.url || ""))); const all = (await chrome.windows.getAll({ populate: true })).map((w) => ({ id: w.id, type: w.type, w: w.width, l: w.left, t: w.top, h: w.height, tabs: w.tabs.map((t) => (t.url || "").slice(0, 60)) })); const di = chrome.system && chrome.system.display ? await chrome.system.display.getInfo().then((d) => d.map((x) => ({ wa: x.workArea, primary: x.isPrimary }))).catch((e) => String(e)) : "sin system.display"; return { r, all, di, ws: ws.map((w) => ({ w: w.width, l: w.left, h: w.height, type: w.type, scr: screen.availWidth })) }; });
+      console.log("  OPEN_PANEL →", JSON.stringify(ow));
+      // (el arnés lanza Chrome con --window-size=1400: el ANCHO lo fuerza el flag; lo que se comprueba es el borde derecho)
+      const wa = Array.isArray(ow.di) && ow.di[0] && ow.di[0].wa;
+      check("la ventana lateral se abre pegada al borde derecho de la pantalla", ow.r && ow.r.ok && ow.ws.length === 1 && wa && ow.ws[0].l + ow.ws[0].w === wa.left + wa.width, JSON.stringify({ ws: ow.ws, wa }));
+      check("«preparar todas»: intenta TODAS las pestañas abiertas (preparadas + rechazadas = abiertas)", r.ok && r.total >= 2 && r.armed.length + r.failed.length === r.total, JSON.stringify({ total: r.total, armed: r.armed.length, failed: r.failed.length }));
+    }
     const vis = [await u2.evaluate(() => document.visibilityState), await u3.evaluate(() => document.visibilityState)];
     console.log("  visibilidad de las pestañas de Flow al empezar:", vis.join(", "));
     if (sc.dest === "folder") {
@@ -331,6 +355,16 @@ async function runScenario(name, sc, server) {
     await panel.check(`input[name=runMode][value=${sc.runMode || "parallel"}]`, { force: true });
     await panel.evaluate((m) => { const el = document.getElementById("genMode"); el.value = m; el.dispatchEvent(new Event("change", { bubbles: true })); }, sc.genMode || "paired");
     if (sc.maxRetries) await panel.evaluate((v) => { const el = document.getElementById("maxRetries"); el.value = String(v); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); }, sc.maxRetries);
+    // v2.12: por defecto el panel abre un proyecto NUEVO en cada cuenta; los escenarios antiguos
+    // parten de su proyecto ya abierto (sc.newProject = true para probar la función nueva).
+    await panel.evaluate((on) => { const el = document.getElementById("newProject"); el.checked = on; el.dispatchEvent(new Event("change", { bubbles: true })); }, !!sc.newProject);
+    if (sc.seedStale) {
+      // progreso de un lote ANTERIOR (debe borrarse al empezar el nuevo)
+      await panel.evaluate(() => chrome.storage.local.set({
+        batch_u2: { batchId: "OLD", accountKey: "u2", order: [1], scenes: { 1: { image: "done", video: "done", download: "done" } }, status: "done", phase: "done", updatedAt: Date.now(), config: {} },
+        fbrVoice: { status: "done", msg: "voz vieja", startedAt: Date.now(), file: "audio.mp3" },
+      }));
+    }
     await sleep(500);
     await panel.screenshot({ path: path.join(OUT, `panel-lote-${name}.png`), fullPage: true });
     await panel.click("#start");
@@ -428,6 +462,19 @@ async function runScenario(name, sc, server) {
     if (E.rejected) check('"Rechazar" pulsado las veces esperadas', c3.rejected === (E.rejected.u3 || 0) && c2.rejected === (E.rejected.u2 || 0), `u2 rechazos=${c2.rejected} u3 rechazos=${c3.rejected}`);
     check("ningún vídeo pedido sin su imagen ni con dos imágenes adjuntas", c2.multi + c3.multi + c2.noimg + c3.noimg === 0, `sin imagen=${c2.noimg + c3.noimg} dobles=${c2.multi + c3.multi}`);
     if (E.immediate) check("cada vídeo se descargó nada más generarse (sin pasada final de descargas)", !/Fase 2B: descargo/.test(logTxt) && (logTxt.match(/Guardado: /g) || []).length === 3);
+    if (E.settings) {
+      // v2.12: en TODOS los envíos de cada cuenta el proyecto tenía imagen/vídeo 9:16, x1, Omni 1.1 Flash y confirmar = Siempre
+      for (const [nm, pg] of [["u2", u2], ["u3", u3]]) {
+        const list = await pg.evaluate(() => JSON.parse(sessionStorage.getItem("mockSendSettings") || "[]"));
+        const okAll = list.length > 0 && list.every((x) => x.imgAspect === "9:16" && x.imgCount === "x1" && x.vidAspect === "9:16" && x.vidCount === "x1" && x.vidModel === "Omni 1.1 Flash" && x.confirm === "always");
+        check(`ajustes en todos los envíos de ${nm} (9:16, x1, Omni 1.1 Flash, confirmar=Siempre)`, okAll, JSON.stringify(list[0] || null) + ` · ${list.length} envíos`);
+      }
+      check("se abrió un proyecto NUEVO en cada cuenta", /project\/nuevo\d+/.test(u2.url()) && /project\/nuevo\d+/.test(u3.url()), `${u2.url()} · ${u3.url()}`);
+    }
+    if (E.staleReset) {
+      const st = await panel.evaluate(() => chrome.storage.local.get(["batch_u2", "fbrVoice"]));
+      check("el progreso del lote anterior se borró al empezar el nuevo", st.batch_u2 && st.batch_u2.batchId !== "OLD" && !st.fbrVoice, JSON.stringify({ b: st.batch_u2 && st.batch_u2.batchId, v: st.fbrVoice && st.fbrVoice.msg }));
+    }
     if (E.logHas) for (const t of E.logHas) check(`el log dice "${t}"`, logTxt.includes(t));
     if (E.logNot) for (const t of E.logNot) check(`el log NO dice "${t}"`, !logTxt.includes(t));
     if (E.started) check("vídeos que Flow empezó a generar", c2.started === (E.started.u2 || 0), `u2=${c2.started}`);
@@ -485,6 +532,7 @@ async function runScenario(name, sc, server) {
   }
 }
 
+const lastQuery = {};
 async function main() {
   const key = path.join(TMP, "key.pem"), cert = path.join(TMP, "cert.pem");
   if (!fs.existsSync(cert)) execSync(`openssl req -x509 -newkey rsa:2048 -nodes -keyout ${key} -out ${cert} -days 30 -subj /CN=flow.google.com 2>/dev/null`);
@@ -534,10 +582,19 @@ async function main() {
       return res.end(fs.readFileSync(path.join(__dirname, "mock-heygen.html")));
     }
     if (req.url.startsWith("/vendor-prosemirror.js")) { res.setHeader("Content-Type", "text/javascript"); return res.end(fs.readFileSync(path.join(__dirname, "vendor-prosemirror.js"))); }
+    // v2.12: home de Flow (/u/N/) con el botón «Nuevo proyecto» → /u/N/project/nuevoK?<mismos parámetros del simulador>
+    const home = req.url.match(/^\/u\/(\d+)\/?(\?.*)?$/);
+    if (home) {
+      const u = home[1];
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.end(`<!doctype html><title>Flow home (simulado)</title><body style="background:#111;color:#ddd"><h1>Flow</h1><button id="np"><span>add</span>Nuevo proyecto</button><script>document.getElementById("np").onclick=()=>{location.href="/u/${u}/project/nuevo"+Date.now()+"?${(lastQuery[u] || "").replace(/"/g, "")}"};</script>`);
+    }
+    const proj = req.url.match(/^\/u\/(\d+)\/project\/[^?]*\?(.*)$/);
+    if (proj) lastQuery[proj[1]] = proj[2];
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "voicestop2", "music", "musiconly", "videoerror", "realok", "realfail", "realpolicy", "realempty", "busyagent", "alwaysretry", "realtiles", "costen", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "voicestop2", "music", "musiconly", "videoerror", "newproject", "armall", "realok", "realfail", "realpolicy", "realempty", "busyagent", "alwaysretry", "realtiles", "costen", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));
