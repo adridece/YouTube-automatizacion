@@ -83,7 +83,7 @@ TABS.forEach((t, i) => {
 
 // ------------------------------------------------------------ FORMULARIO
 const FORM_KEY = "fbrForm";
-const FIELDS = ["prompts", "narration", "music", "accA_on", "accA_num", "accA_range", "accA_res", "accB_on", "accB_num", "accB_range", "accB_res", "nameFormat", "prefix", "genMode", "maxWait", "maxRetries", "autoRun"];
+const FIELDS = ["prompts", "narration", "music", "accA_on", "accA_num", "accA_range", "accA_res", "accB_on", "accB_num", "accB_range", "accB_res", "nameFormat", "prefix", "genMode", "maxWait", "maxRetries", "autoRun", "newProject"];
 function radio(name) { const r = document.querySelector(`input[name="${name}"]:checked`); return r ? r.value : null; }
 function setRadio(name, v) { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; }
 
@@ -137,6 +137,19 @@ async function armActiveFlowTab() {
   const r = await chrome.runtime.sendMessage({ type: "ARM_TAB", tabId: tab.id }).catch(() => null);
   if (r && r.ok && !r.already) toast(r.acc === "heygen" ? "Pestaña de HeyGen lista: la voz se hará aunque mires otra pestaña" : r.acc === "mureka" ? "Pestaña de Mureka lista: la música se hará aunque mires otra pestaña" : `Pestaña ${r.acc.replace("u", "/u/")}/ lista: seguirá trabajando aunque mires otra`);
   else if (r && !r.ok && r.error) toast(`No pude preparar esta pestaña: ${r.error}`);
+  await refreshArmed();
+}
+// v2.12: al abrir la extensión se preparan de golpe todas las pestañas abiertas (Flow, HeyGen, Mureka).
+function showArmAll(r) {
+  if (!r || !r.total) return;
+  const nice = (a) => (/^u\d+$/.test(a) ? a.replace("u", "/u/") + "/" : a);
+  if (!r.failed.length) toast(`${r.armed.length} pestaña${r.armed.length === 1 ? "" : "s"} lista${r.armed.length === 1 ? "" : "s"} para trabajar aunque mires otra`);
+  else toast(`${r.armed.length}/${r.total} pestañas listas. Chrome pide un clic tuyo en: ${r.failed.map((f) => nice(f.acc)).join(", ")} (entra y pulsa la cereza una vez)`);
+}
+async function armAllTabs() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const r = await chrome.runtime.sendMessage({ type: "ARM_ALL", firstTabId: tab ? tab.id : null }).catch(() => null);
+  if (r && r.ok) showArmAll(r);
   await refreshArmed();
 }
 async function refreshTabs() {
@@ -393,12 +406,18 @@ $("start").addEventListener("click", async () => {
       destMode: f.dest,
       batchFolder,
       batchId,
+      newProject: !!f.newProject && !["dryRun", "downloadTest", "sendTest"].includes(mode),
     },
   }));
   await saveForm();
   const noAudio = ["dryRun", "downloadTest", "sendTest"].includes(mode);
   const voice = narration && heygenTab && !noAudio ? { text: narration, batchFolder, destMode: f.dest } : null;
   const musicPlan = music && murekaTab && !noAudio ? { prompt: music, batchFolder, destMode: f.dest } : null;
+  // Lote nuevo = progreso nuevo: se borra ya lo del anterior (el background borra también lo guardado).
+  batches = {};
+  voiceState = null;
+  musicState = null;
+  renderProgress();
   await chrome.runtime.sendMessage({ type: "RUN_PLAN", plan: { parallel: f.runMode !== "sequential", steps, voice, music: musicPlan } });
   if (voiceOnly) toast(`Generando solo ${[voice ? "la voz" : "", musicPlan ? "la música" : ""].filter(Boolean).join(" y ")}`);
   else if (unchecked.length) toast(`Lanzado (${MODE_TEXT[mode] || mode}). Ojo: ${unchecked.length} punto(s) del checklist sin marcar.`);
@@ -605,6 +624,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // tras pulsar la cereza con el panel ya abierto.
 chrome.runtime.onMessage.addListener((msg) => {
   if (!msg || msg.type !== "ARMED_EVENT") return false;
+  if (msg.all) { showArmAll(msg); refreshArmed().then(refreshDerived).catch(() => {}); return false; }
   if (msg.ok && !msg.already) toast(`Pestaña ${String(msg.acc).replace("u", "/u/")}/ lista: seguirá trabajando aunque mires otra`);
   else if (msg.ok && msg.already) toast(`Pestaña ${String(msg.acc).replace("u", "/u/")}/ ya estaba lista`);
   else toast(`No pude preparar esta pestaña: ${msg.error}`);
@@ -617,12 +637,12 @@ $("popOut").addEventListener("click", openFloating);
 $("popOut").hidden = MODO === "ventana";
 $("uiMode").addEventListener("change", async (e) => {
   const r = await chrome.runtime.sendMessage({ type: "SET_UI_MODE", mode: e.target.value });
-  toast(r && r.mode === "popup" ? "Hecho: al pulsar el icono se abrirá la ventanita" : "Hecho: al pulsar el icono se abrirá el panel lateral");
+  toast(r && r.mode === "popup" ? "Hecho: al pulsar el icono se abrirá la ventanita" : r && r.mode === "sidepanel" ? "Hecho: al pulsar el icono se abrirá el panel lateral" : "Hecho: al pulsar el icono se abrirá la ventana lateral");
 });
 
 (async function init() {
   hydrateIcons();
-  $("uiMode").value = (await chrome.storage.local.get("fbrUiMode")).fbrUiMode || "popup";
+  $("uiMode").value = (await chrome.storage.local.get("fbrUiMode")).fbrUiMode || "ventana";
   $("version").textContent = `v${chrome.runtime.getManifest().version}`;
   await loadForm();
   checks = (await chrome.storage.local.get(CHECK_KEY))[CHECK_KEY] || {};
@@ -633,6 +653,7 @@ $("uiMode").addEventListener("change", async (e) => {
   musicState = all.fbrMusic || null;
   await refreshFolder();
   await armActiveFlowTab().catch(() => {});
+  await armAllTabs().catch(() => {});
   await refreshArmed().catch(() => {});
   await refreshTabs();
   setInterval(async () => { await refreshArmed().catch(() => {}); refreshDerived(); }, 5000);

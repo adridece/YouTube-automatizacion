@@ -623,7 +623,7 @@ async function sendAndConfirm({ maxPoints, onApproved, dryRun, onlySend }) {
       }
       // v2.11 (visto en vivo, 30 sep): el Agent puede contestar VACÍO (sin aviso de coste, sin texto,
       // sin error). No se esperan 8 min: si lleva 100 s sin cambiar nada y sin trabajar, se reintenta.
-      if (Date.now() - stableSince > CONFIG.agentSilentMs && !agentBusyNow()) {
+      if (now.length - baseLen <= 60 && Date.now() - stableSince > CONFIG.agentSilentMs && !agentBusyNow()) {
         return { type: "agentReplied", error: "el Agent no contestó nada (ni aviso de coste ni error) en 100 s" };
       }
       return null;
@@ -893,6 +893,95 @@ async function attachReferenceImage(n) {
   clickDeep(item);
   await verifyAttached(before, '"Animar"');
   log("ok", `Imagen ${label} adjuntada con "Animar" (plan B).`);
+}
+
+// ============================================ PROYECTO NUEVO Y AJUSTES DEL AGENTE (v2.12)
+// DOM REAL medido el 30 sep 2026: en un proyecto NUEVO el agente trae imagen 16:9 x2 y vídeo 16:9 x1;
+// los ajustes (panel «Ajustes» ⚙ del Agent → Guardar) son POR PROYECTO y se guardan al pulsar Guardar.
+// Estructura: 2 radios «Siempre/Nunca» (confirmar antes de generar), 4 mat-button-toggle-group
+// [imagen: formato, imagen: cantidad, vídeo: formato, vídeo: cantidad] y 2 menús de modelo.
+function clickNewProject() {
+  const btn = $$("button").find((b) => /nuevo proyecto|new project/i.test(`${b.textContent} ${b.getAttribute("aria-label") || ""}`));
+  if (!btn) return false;
+  btn.click();
+  return true;
+}
+function agentSettingsButton() {
+  const panel = $(CONFIG.agentPanelSelector);
+  if (!panel) return null;
+  const bs = $$("button", panel);
+  return bs.find((b) => /^(ajustes|settings)$/i.test((b.getAttribute("aria-label") || "").trim())) || bs.find((b) => (b.textContent || "").trim() === "tune") || null;
+}
+function settingsGroups() {
+  const panel = $(CONFIG.agentPanelSelector);
+  const groups = panel ? $$("mat-button-toggle-group", panel) : [];
+  const btnsOf = (g) => $$("button[role=radio], button", g);
+  const txt = (b) => (b.textContent || "").replace(/\s+/g, "");
+  const aspect = groups.filter((g) => btnsOf(g).some((b) => /\d+:\d+$/.test(txt(b))));
+  const count = groups.filter((g) => btnsOf(g).some((b) => /^x\d$/.test(txt(b))));
+  return { panel, imgAspect: aspect[0], vidAspect: aspect[1], imgCount: count[0], vidCount: count[1], btnsOf, txt };
+}
+const isChecked = (b) => b.getAttribute("aria-checked") === "true" || b.getAttribute("aria-pressed") === "true" || b.classList.contains("mat-button-toggle-checked") || (b.closest("mat-button-toggle") || b).classList.contains("mat-button-toggle-checked");
+async function ensureAgentSettings() {
+  ctxPhase = "setup";
+  ctxScene = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    throwIfStopped();
+    try {
+      const opener = await tryWait(() => agentSettingsButton(), 30000, 'el botón «Ajustes» del Agent');
+      if (!opener) throw new Error('no encuentro el botón «Ajustes» del Agent');
+      opener.click();
+      const g = await tryWait(() => { const x = settingsGroups(); return x.imgAspect && x.imgCount && x.vidAspect && x.vidCount ? x : null; }, 15000, "el panel de ajustes del Agent");
+      if (!g) throw new Error("no se abre el panel de ajustes del Agent (no veo los selectores de formato y cantidad)");
+      const done = [];
+      const pick = async (group, re, label) => {
+        const b = g.btnsOf(group).find((x) => re.test(g.txt(x)));
+        if (!b) throw new Error(`no encuentro la opción ${label}`);
+        if (!isChecked(b)) { b.click(); await sleep(250); if (!isChecked(b)) { clickDeep(b); await sleep(250); } }
+        if (!isChecked(b)) throw new Error(`no pude marcar ${label}`);
+        done.push(label);
+      };
+      await pick(g.imgAspect, /9:16$/, "imagen 9:16");
+      await pick(g.imgCount, /^x1$/, "imagen x1");
+      await pick(g.vidAspect, /9:16$/, "vídeo 9:16");
+      await pick(g.vidCount, /^x1$/, "vídeo x1");
+      // «Confirmar antes de generar» = Siempre (para poder comprobar el coste de cada vídeo)
+      const always = $$("mat-radio-button", g.panel).find((r) => /^(siempre|always)/i.test((r.textContent || "").trim()));
+      if (always) {
+        const inp = $("input", always);
+        if (inp && !inp.checked) { inp.click(); await sleep(250); }
+        if (inp && !inp.checked) throw new Error("no pude poner «Confirmar antes de generar» en «Siempre»");
+        done.push("confirmar = Siempre");
+      }
+      // Modelo de vídeo = Omni 1.1 Flash (el de 10 puntos por 6 s)
+      const modelBtns = $$("button", g.panel).filter((b) => /arrow_drop_down/.test(b.textContent || ""));
+      const vidModel = modelBtns[1] || modelBtns[modelBtns.length - 1];
+      if (vidModel) {
+        if (!/omni 1\.1 flash/i.test(vidModel.textContent || "")) {
+          vidModel.click();
+          const item = await tryWait(() => findMenuItemByText("Omni 1.1 Flash"), 6000, "«Omni 1.1 Flash» en el menú de modelos");
+          if (!item) { await closeOverlays(); throw new Error("no encuentro «Omni 1.1 Flash» en el menú del modelo de vídeo"); }
+          (item.querySelector("button") || item).click();
+          await sleep(500);
+        }
+        if (!/omni 1\.1 flash/i.test(vidModel.textContent || "")) throw new Error("no pude elegir el modelo «Omni 1.1 Flash»");
+        done.push("vídeo Omni 1.1 Flash");
+      }
+      const save = $$("button", g.panel).find((b) => /^(guardar|save)$/i.test((b.textContent || "").trim()));
+      if (!save) throw new Error("no encuentro el botón «Guardar» de los ajustes");
+      save.click();
+      await tryWait(() => !settingsGroups().imgAspect, 8000, "que se cierre el panel de ajustes");
+      log("ok", `Ajustes del proyecto nuevo: ${done.join(" · ")} (guardados).`);
+      return true;
+    } catch (e) {
+      if (e instanceof StopError) throw e;
+      log("warn", `Ajustes del agente: ${e.message}${attempt < 3 ? ` (intento ${attempt}/3)` : ""}.`);
+      await closeOverlays();
+      await sleep(1500);
+    }
+  }
+  log("error", "No pude fijar los ajustes del agente (imagen/vídeo 9:16, x1, Omni 1.1 Flash). Sigo con los que tenga el proyecto: revísalos a mano en ⚙ Ajustes del Agent.");
+  return false;
 }
 
 // ============================================================ FASE 2A: VÍDEOS
@@ -1789,6 +1878,7 @@ async function runBatch(cfg, resumeState) {
       const shown = (document.body ? document.body.innerText : "").replace(/\s+/g, " ").trim().slice(0, 140);
       throw new Error(`no encuentro la caja de prompt de Flow tras 90 s (pestaña ${document.visibilityState}; URL ${location.pathname}; la página muestra: "${shown || "nada"}")`);
     }
+    if (cfg.applySettings && !isResume && !["sendTest", "downloadTest"].includes(cfg.genMode)) await ensureAgentSettings();
     if (cfg.genMode === "sendTest") {
       await runSendTest();
       batch.status = "done";
@@ -1890,6 +1980,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     runBatch(msg, null);
     sendResponse({ ok: true });
     return false;
+  }
+  if (msg.type === "NEW_PROJECT") {
+    // la home de Flow puede tardar en pintar el botón
+    tryWait(() => clickNewProject(), 20000, "el botón «Nuevo proyecto»").then((ok) => sendResponse(ok ? { ok: true } : { ok: false, error: "no encuentro el botón «Nuevo proyecto»" }), (e) => sendResponse({ ok: false, error: e.message }));
+    return true;
   }
   if (msg.type === "STOP_QUEUE") {
     if (running) {
