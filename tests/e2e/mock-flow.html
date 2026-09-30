@@ -66,6 +66,7 @@
     <flow-rich-text-editor><div><div contenteditable="true" id="editor"></div></div></flow-rich-text-editor>
     <div style="display:flex;gap:6px;margin-top:6px">
       <flow-add-menu><button type="button" id="plus">+</button></flow-add-menu>
+      <button type="button" id="settingsBtn" aria-label="Ajustes"><mat-icon>tune</mat-icon></button>
       <flow-generate-icon-button><button type="submit" aria-label="Iniciar generación">➤</button></flow-generate-icon-button>
     </div>
   </form>
@@ -95,6 +96,11 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const say = (html) => { const d = document.createElement("div"); d.className = "msg"; d.innerHTML = html; chat.appendChild(d); chat.scrollTop = 1e9; return d; };
 
 // SIM: como Flow real, el proyecto conserva sus tiles tras recargar (F5).
+// v2.12: un proyecto NUEVO (otra ruta) empieza vacío, como en Flow real.
+if (sessionStorage.getItem("mockPath") !== location.pathname) {
+  ["mockTiles", "mockSeeded", "mockPendingVideo", "mockPendingLabel"].forEach((k) => sessionStorage.removeItem(k));
+  sessionStorage.setItem("mockPath", location.pathname);
+}
 const saved = JSON.parse(sessionStorage.getItem("mockTiles") || "[]");
 function persist() {
   const list = [...grid.children].reverse().filter((t) => t.tagName !== "FLOW-PENDING-TILE").map((t) => ({ tag: t.tagName.toLowerCase(), name: t.querySelector(".footer-title").textContent, src: (t.querySelector("video,img") || {}).getAttribute("src") }));
@@ -136,6 +142,7 @@ editor.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && P.get("sendNeeds") === "enter") { e.preventDefault(); doSend(); }
 }, true);
 function doSend() {
+  recordSettings();
   const text = promptText();
   const att = [...attachRow.children].map((a) => a.dataset.label);
   if (!text) return;
@@ -272,7 +279,12 @@ function finalizeVideo(wantName, label) {
   // realTiles=1 (como Flow REAL, log v2.10: "sin identificador estable (seq)"): el tile no trae <video> ni
   // ids, y al terminar cada vídeo Flow REDIBUJA la cuadrícula (todos los tiles son nodos nuevos).
   if (REAL) { t.dataset.scene = label || ""; setTimeout(rerenderVideos, 300); }
-  if (P.get("realTiles")) { t.dataset.scene = label || ""; const vv = t.querySelector("video"); if (vv) vv.remove(); setTimeout(rerenderVideos, 300); }
+  if (P.get("realTiles")) {
+    t.dataset.scene = label || ""; const vv = t.querySelector("video"); if (vv) vv.remove();
+    // como Flow real: el vídeo terminado lleva miniatura (aquí con URL blob: → la extensión NO puede usarla como clave estable)
+    if (!t.querySelector("img.thumbnail")) { const i = document.createElement("img"); i.className = "thumbnail"; i.alt = "Miniatura de vídeo generada"; i.setAttribute("src", "blob:https://flow.google.com/" + uid()); t.prepend(i); }
+    setTimeout(rerenderVideos, 300);
+  }
   if (P.get("wrongRename")) setTimeout(() => { t.querySelector(".footer-title").textContent = "mundofut_001_0000"; }, 1000);
   assets.unshift({ name: "Animate", kind: "Vídeo", tile: t });
   // SIM: el Agent renombra el vídeo si se lo piden (salvo noRename=1).
@@ -367,6 +379,51 @@ grid.addEventListener("contextmenu", (e) => {
       }, /1080p/.test(o.textContent) ? T.prep : 300);
     }));
   }));
+});
+
+// ---- AJUSTES DEL AGENT POR PROYECTO (v2.12; DOM medido en Flow real el 30 sep 2026)
+// En un proyecto NUEVO: imagen 16:9 x2, vídeo 16:9 x1, confirmar = Siempre. Se guardan con «Guardar»
+// y son POR PROYECTO (clave = ruta). vidModel=veo: el modelo de vídeo por defecto es otro.
+const SKEY = "mockSettings:" + location.pathname;
+const defaultSettings = () => ({ imgAspect: "16:9", imgCount: "x2", vidAspect: "16:9", vidCount: "x1", confirm: "always", vidModel: P.get("vidModel") === "veo" ? "Veo 3.1 - Fast" : "Omni 1.1 Flash" });
+const getSettings = () => JSON.parse(sessionStorage.getItem(SKEY) || "null") || defaultSettings();
+function recordSettings() {
+  const list = JSON.parse(sessionStorage.getItem("mockSendSettings") || "[]");
+  list.push(getSettings());
+  sessionStorage.setItem("mockSendSettings", JSON.stringify(list));
+}
+document.getElementById("settingsBtn").addEventListener("click", () => {
+  if (document.getElementById("settingsPane")) return;
+  const cur = getSettings();
+  const pane = document.createElement("div");
+  pane.id = "settingsPane";
+  pane.style.cssText = "position:absolute;inset:0;background:#181818;z-index:50;overflow:auto;padding:10px";
+  const grp = (key, opts, label) => `<mat-button-toggle-group data-key="${key}">` + opts.map((o) => `<button type="button" role="radio" aria-checked="${cur[key] === o[0]}" data-v="${o[0]}">${label(o)}</button>`).join("") + `</mat-button-toggle-group>`;
+  const asp = (list) => list.map((a) => [a, a]);
+  pane.innerHTML = `<div><mat-radio-button><input type="radio" name="cf" value="always" ${cur.confirm === "always" ? "checked" : ""}>Siempre El agente pedirá confirmación</mat-radio-button>
+    <mat-radio-button><input type="radio" name="cf" value="never" ${cur.confirm === "never" ? "checked" : ""}>Nunca El agente generará y gastará puntos</mat-radio-button></div>
+    <span>Generación de imágenes predeterminada</span>
+    ${grp("imgAspect", asp(["16:9", "4:3", "1:1", "3:4", "9:16"]), (o) => "crop_x" + o[1])}
+    ${grp("imgCount", asp(["x1", "x2", "x3", "x4"]), (o) => o[1])}
+    <button type="button" aria-label="Modelo predeterminado de generación de imágenes">🍌 Nano Banana 2 arrow_drop_down</button>
+    <span>Generación de vídeo predeterminada</span>
+    ${grp("vidAspect", asp(["16:9", "9:16"]), (o) => "crop_x" + o[1])}
+    ${grp("vidCount", asp(["x1", "x2", "x3", "x4"]), (o) => o[1])}
+    <button type="button" id="vidModelBtn" aria-label="Modelo predeterminado de generación de vídeo">${cur.vidModel} arrow_drop_down</button>
+    <button type="button" id="settingsSave" class="settings-save-button">Guardar</button>`;
+  document.querySelector("flow-agent-panel").appendChild(pane);
+  pane.querySelectorAll("mat-button-toggle-group").forEach((g) => g.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    g.querySelectorAll("button").forEach((x) => x.setAttribute("aria-checked", "false")); b.setAttribute("aria-checked", "true"); cur[g.dataset.key] = b.dataset.v;
+  })));
+  pane.querySelectorAll("input[name=cf]").forEach((i) => i.addEventListener("change", () => { cur.confirm = i.value; }));
+  pane.querySelector("#vidModelBtn").addEventListener("click", (e) => {
+    closeOverlay();
+    const menu = document.createElement("div"); menu.className = "ctx"; menu.style.left = "20px"; menu.style.top = "300px";
+    menu.innerHTML = ["Omni 1.1 Flash", "Veo 3.1 - Lite", "Veo 3.1 - Fast", "Veo 3.1 - Quality"].map((t) => `<flow-menu-item><button role="menuitem" type="button">${t}</button></flow-menu-item>`).join("");
+    overlay.appendChild(menu);
+    menu.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { cur.vidModel = b.textContent; e.target.textContent = b.textContent + " arrow_drop_down"; closeOverlay(); }));
+  });
+  pane.querySelector("#settingsSave").addEventListener("click", () => { sessionStorage.setItem(SKEY, JSON.stringify(cur)); pane.remove(); });
 });
 // SIM (lazyPanel=1): Flow no pinta la caja de prompt hasta que la pestaña se
 // ve y hay fotogramas (lo que le pasó a la cuenta u3 del usuario).

@@ -80,6 +80,7 @@ function notify(title, message, sticky) {
 // abría como página completa), se pasa solo a "popup".
 const UI_KEY = "fbrUiMode";
 const POPUP_PAGE = "sidepanel.html?modo=popup";
+const UI_MIGRATED_211 = "fbrUiMode211"; // una sola vez: todos a "ventana" (lateral) al pasar a v2.12
 const UI_MIGRATED_KEY = "fbrUiMode26"; // una sola vez: todos a "popup" al pasar a v2.6
 
 function sidePanelSupported() {
@@ -94,7 +95,18 @@ async function applyUiMode() {
     await chrome.storage.local.set({ [UI_KEY]: "popup", [UI_MIGRATED_KEY]: true });
     st[UI_KEY] = "popup";
   }
-  const mode = st[UI_KEY] || "popup";
+  // v2.12: por defecto la interfaz se abre SIEMPRE como la ventana lateral (la del botón ↗).
+  if (!(await chrome.storage.local.get(UI_MIGRATED_211))[UI_MIGRATED_211]) {
+    await chrome.storage.local.set({ [UI_KEY]: "ventana", [UI_MIGRATED_211]: true });
+    st[UI_KEY] = "ventana";
+  }
+  const mode = st[UI_KEY] || "ventana";
+  if (mode === "ventana") {
+    // Sin popup: el clic en el icono lo recibe action.onClicked, que abre la ventana lateral.
+    await chrome.action.setPopup({ popup: "" });
+    if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+    return mode;
+  }
   if (mode === "popup" || !sidePanelSupported()) {
     await chrome.action.setPopup({ popup: POPUP_PAGE });
     if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
@@ -123,6 +135,15 @@ chrome.runtime.onStartup.addListener(() => applyUiMode().catch(() => {}));
 // y (2) si la pestaña es de Flow, la PREPARA para segundo plano. Si el panel
 // no se puede abrir, se pasa al modo ventanita para las siguientes veces.
 chrome.action.onClicked.addListener(async (tab) => {
+  const uiMode = (await chrome.storage.local.get(UI_KEY))[UI_KEY] || "ventana";
+  if (uiMode === "ventana" || !sidePanelSupported()) {
+    // v2.12: la ventana lateral (como el botón ↗). La pestaña pulsada se prepara PRIMERO (Chrome
+    // solo da permiso de captura en ella) y luego se intentan todas las demás abiertas.
+    const armAll = armAllTabs(tab.id);
+    await openFloatingWindow();
+    armAll.then((r) => chrome.runtime.sendMessage({ type: "ARMED_EVENT", all: true, ...r }).catch(() => {}));
+    return;
+  }
   // Se llama a open() sin esperar a nada antes: Chrome exige que sea
   // inmediato tras el clic.
   const opening = sidePanelSupported() ? chrome.sidePanel.open({ windowId: tab.windowId }) : Promise.reject(new Error("este navegador no tiene panel lateral para extensiones"));
@@ -151,7 +172,22 @@ async function openFloatingWindow() {
     const ok = await chrome.windows.update(id, { focused: true }).then(() => true, () => false);
     if (ok) return "window";
   }
-  const w = await chrome.windows.create({ url: chrome.runtime.getURL("sidepanel.html?modo=ventana"), type: "popup", width: 440, height: 860 });
+  // Pegada al borde derecho de la pantalla (como un panel lateral), sin tocar la ventana de Flow.
+  const geo = { width: 440, height: 860 };
+  try {
+    if (chrome.system && chrome.system.display) {
+      const cur = await chrome.windows.getLastFocused().catch(() => null);
+      const ds = await chrome.system.display.getInfo();
+      const d = (cur && ds.find((x) => cur.left >= x.bounds.left && cur.left < x.bounds.left + x.bounds.width)) || ds.find((x) => x.isPrimary) || ds[0];
+      if (d) {
+        const wa = d.workArea;
+        geo.left = wa.left + wa.width - geo.width;
+        geo.top = wa.top;
+        geo.height = Math.max(500, wa.height);
+      }
+    }
+  } catch (e) { /* sin posición: Chrome la elige */ }
+  const w = await chrome.windows.create({ url: chrome.runtime.getURL("sidepanel.html?modo=ventana"), type: "popup", ...geo });
   await chrome.storage.session.set({ [WIN_KEY]: w.id });
   return "window";
 }
@@ -287,6 +323,25 @@ async function armTab(tabId, quiet) {
   return { ok: true, acc };
 }
 
+// v2.12: prepara de golpe TODAS las pestañas abiertas (Flow, HeyGen, Mureka). Chrome solo deja
+// capturar una pestaña en la que se ha invocado la extensión (la del clic); las demás se intentan
+// igualmente y las que Chrome rechace se devuelven en `failed` para avisar al usuario.
+async function armAllTabs(firstTabId) {
+  const tabs = await chrome.tabs.query({ url: ["https://flow.google.com/*", "https://labs.google/*", "https://app.heygen.com/*", "https://www.mureka.ai/*"] });
+  tabs.sort((a, b) => (b.id === firstTabId) - (a.id === firstTabId));
+  const armed = [];
+  const failed = [];
+  for (const t of tabs) {
+    const r = await armTab(t.id, true).catch((e) => ({ ok: false, error: e.message }));
+    const label = r.acc || getFlowAccountKey(t.url);
+    if (r.ok) armed.push({ tabId: t.id, acc: label, already: !!r.already });
+    else failed.push({ tabId: t.id, acc: label, error: r.error || "?", needsClick: !!r.needsClick });
+  }
+  const fresh = armed.filter((a) => !a.already).length;
+  if (tabs.length) blog(failed.length ? "warn" : "ok", `Pestañas preparadas para segundo plano: ${armed.length}/${tabs.length}${fresh ? ` (${fresh} nuevas)` : ""}.${failed.length ? ` Chrome no me deja prepararlas sin un clic tuyo en: ${failed.map((f) => f.acc).join(", ")} (entra en esas pestañas y pulsa la cereza una vez).` : ""}`, { phase: "setup" });
+  return { armed, failed, total: tabs.length };
+}
+
 // ------------------------------------------- FOCO Y PULSACIONES REALES (depurador)
 // PRUEBA REAL v2.4.0: con la pestaña preparada pero SIN foco (usuario en otra
 // pestaña), Flow no acepta el envío: ni clic, ni Enter, ni ninguna forma de
@@ -381,8 +436,48 @@ async function setPlan(p) {
   else await chrome.storage.session.remove(PLAN_KEY);
 }
 
+// v2.12: abre un PROYECTO NUEVO en la pestaña de esa cuenta (home → «Nuevo proyecto» → /project/…).
+// Si la cuenta no tiene pestaña de Flow abierta, se crea una (en segundo plano).
+async function openNewProject(tab, acc) {
+  const home = `https://flow.google.com/u/${acc.replace("u", "")}/`;
+  blog("info", `Abro un proyecto nuevo de Flow en ${acc}…`, { acc, phase: "setup" });
+  let t = tab;
+  if (!t) t = await chrome.tabs.create({ url: home, active: false });
+  else await chrome.tabs.update(t.id, { url: home });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await waitTabLoaded(t.id, 2500);
+    let r = null;
+    try { r = await sendToTab(t.id, { type: "NEW_PROJECT" }); } catch (e) { r = { ok: false, error: e.message }; }
+    if (r && r.ok) {
+      for (let i = 0; i < 60; i++) {
+        const cur = await chrome.tabs.get(t.id).catch(() => null);
+        if (cur && /\/project\//.test(cur.url || "") && cur.status === "complete") { await new Promise((x) => setTimeout(x, 3000)); return { ok: true, tab: cur }; }
+        await new Promise((x) => setTimeout(x, 1000));
+      }
+      return { ok: false, error: "el proyecto nuevo no llegó a abrirse en 60 s" };
+    }
+    blog("warn", `No pude pulsar «Nuevo proyecto» (intento ${attempt}/3): ${(r && r.error) || "sin respuesta"}. Reintento.`, { acc, phase: "setup" });
+    await chrome.tabs.update(t.id, { url: home }).catch(() => {});
+  }
+  return { ok: false, error: "no encuentro el botón «Nuevo proyecto» en Flow" };
+}
+
 async function launchStep(step) {
-  const tab = await findTabForAccount(step.accountKey);
+  let tab = await findTabForAccount(step.accountKey);
+  // Antes de navegar a un proyecto nuevo se prepara la pestaña (el permiso de captura solo vale
+  // mientras no se navega; la captura ya hecha sigue después).
+  if (tab && step.run && step.run.newProject && !(await isArmed(tab.id))) await armTab(tab.id, true).catch(() => {});
+  if (step.run && step.run.newProject) {
+    const np = await openNewProject(tab, step.accountKey);
+    if (!np.ok) {
+      blog("error", `No pude abrir un proyecto nuevo en ${step.accountKey}: ${np.error}. ${tab && /\/project\//.test(tab.url || "") ? "Sigo en el proyecto que ya estaba abierto." : "Esa cuenta no se ejecuta; la otra sigue."}`, { acc: step.accountKey, phase: "setup" });
+      if (!(tab && /\/project\//.test(tab.url || ""))) return false;
+      step.run.applySettings = false;
+    } else {
+      tab = np.tab;
+      step.run.applySettings = true;
+    }
+  }
   if (!tab) {
     blog("error", `No encuentro ninguna pestaña abierta de Flow para la cuenta ${step.accountKey} (busco una URL con /${step.accountKey.replace("u", "u/")}/). Esa cuenta no se ejecuta; la otra sigue.`, { acc: step.accountKey });
     notify("Falta una pestaña de Flow", `No hay pestaña abierta para la cuenta ${step.accountKey}.`, true);
@@ -424,7 +519,20 @@ async function launchStep(step) {
   }
 }
 
+// v2.12: al empezar un lote nuevo se borra el progreso del anterior (tarjetas de cuentas, voz y
+// música), salvo el de una cuenta que siga corriendo ahora mismo.
+async function resetProgress() {
+  const all = await chrome.storage.local.get(null);
+  const running = Object.values(await getRunningTabs());
+  const rm = Object.keys(all).filter((k) => k.startsWith("batch_") && !running.includes(k.slice(6)));
+  rm.push("fbrVoice", "fbrMusic");
+  await chrome.storage.local.remove(rm);
+  return rm.length - 2;
+}
+
 async function runPlan(plan) {
+  const cleared = await resetProgress();
+  if (cleared) blog("info", `Lote nuevo: he borrado el progreso del anterior (${cleared} cuenta${cleared === 1 ? "" : "s"}).`);
   if (!plan.steps.length) {
     // Solo audio (v2.9.1 / v2.10): no hay nada que hacer en Flow.
     const what = [plan.voice && "la voz (HeyGen)", plan.music && "la música (Mureka)"].filter(Boolean).join(" y ");
@@ -1299,6 +1407,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true };
       case "ARM_TAB":
         return await armTab(msg.tabId);
+      case "ARM_ALL":
+        return { ok: true, ...(await armAllTabs(msg.firstTabId)) };
       case "GET_ARMED": {
         const a = await getArmed();
         const out = {};
@@ -1329,7 +1439,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case "OPEN_PANEL":
         return { ok: true, how: await openFloatingWindow() };
       case "SET_UI_MODE":
-        await chrome.storage.local.set({ [UI_KEY]: msg.mode === "popup" ? "popup" : "sidepanel" });
+        await chrome.storage.local.set({ [UI_KEY]: msg.mode === "popup" ? "popup" : msg.mode === "sidepanel" ? "sidepanel" : "ventana" });
         return { ok: true, mode: await applyUiMode() };
       case "FS_STATUS":
         return await offscreenCall({ type: "FS_STATUS" });

@@ -42,7 +42,16 @@ nombre numerado. Es una herramienta personal del dueño del repo, para su canal 
 6. Si una generación falla (política de contenido, etc.): reintentar reformulando, y **siempre informar del número
    de escena** que falló. Nunca dejar que un fallo pare las demás escenas ni la otra cuenta.
 
-## Estado actual (30 sep 2026 — v2.11.0, "Cerezium Autopilot")
+## Estado actual (30 sep 2026 — v2.12.0, "Cerezium Autopilot")
+v2.12.0 (BUG_HISTORY #85, petición del usuario): (1) el icono abre SIEMPRE la **ventana lateral** (la del botón ↗), pegada a la derecha;
+(2) al lanzar el lote la extensión **abre un proyecto nuevo** en cada cuenta (home `/u/N/` → «Nuevo proyecto») y **pone sola** imagen y
+vídeo 9:16, x1, vídeo **Omni 1.1 Flash** y «Confirmar antes de generar = Siempre» (los ajustes son por proyecto; casilla del panel, activa
+por defecto; ya NO es cierto que la extensión "nunca toca el modelo de vídeo": solo lo fija a Omni Flash); (3) al empezar un lote se **borra
+el progreso del anterior** (`resetProgress`); (4) `ARM_ALL`: al abrir la ventana intenta preparar TODAS las pestañas abiertas, pero **Chrome
+no deja capturar una pestaña donde no se ha pulsado la extensión** (medido: «Extension has not been invoked… activeTab»): las rechazadas se
+avisan (un clic por pestaña mientras siga abierta). e2e nuevos: `newproject`, `armall`. SIN VERIFICAR en real: que la captura sobreviva a la
+navegación a la home y el ancho 440 de la ventana.
+
 v2.11.0 (BUG_HISTORY #84, **DOM real inspeccionado en vivo con Claude in Chrome** — ver `docs/FLOW_DOM_FINDINGS.md` "Ciclo de vida REAL"):
 un vídeo terminado = `img.thumbnail` (NO hay `<video>`); un tile sin miniatura nunca es un vídeo; el fallo de Flow es una tarjeta
 `flow-error-tile` en el chat; el botón de generar está deshabilitado con la caja vacía (NO es "ocupado"); el Agent puede contestar vacío.
