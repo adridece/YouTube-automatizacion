@@ -125,6 +125,30 @@ const SCENARIOS = {
     u2: "", u3: "videoErrorTile=8",
     expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 9 }, files: FILES, logHas: ["Segunda vuelta automática"] },
   },
+  realok: {
+    desc: "DOM REAL (30 sep): vídeo = <img class=thumbnail> sin <video>, provisional sin imagen, botón de generar deshabilitado con la caja vacía → NO se espera al Agent de más, cada vídeo se descarga al generarse con su escena",
+    askWhereToSave: true, dest: "folder", timeoutMin: 6,
+    u2: "real=1", u3: "real=1",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true, logNot: ["no ha quedado libre", "El Agent de Flow sigue trabajando"] },
+  },
+  realfail: {
+    desc: "DOM REAL: el 1.er vídeo de u2 FALLA con tarjeta <flow-error-tile> en el chat (sin tile) y el de u3 se queda SIN miniatura (caso u3 real): se reconocen como fallo en segundos, se reintentan y todo se descarga",
+    askWhereToSave: true, dest: "folder", timeoutMin: 9,
+    u2: "real=1&videoErrorTile=1", u3: "real=1&stallTile=1",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 3, u3: 2 }, files: FILES, immediate: true, logHas: ["aviso de error de Flow", "el vídeo quedó sin miniatura"], logNot: ["no ha quedado libre"] },
+  },
+  realpolicy: {
+    desc: "DOM REAL: Flow bloquea por políticas el 1.er vídeo de cada cuenta: se reintenta suavizando el prompt sin esperas inútiles",
+    askWhereToSave: true, dest: "folder", timeoutMin: 9,
+    u2: "real=1&policyVideo=1", u3: "real=1&policyVideo=1",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 3, u3: 2 }, files: FILES, immediate: true, logHas: ["bloqueo por políticas"], logNot: ["no ha quedado libre"] },
+  },
+  realempty: {
+    desc: "DOM REAL (visto en vivo): el Agent contesta VACÍO al 1.er envío de u2 (ni coste ni error): se detecta a los 100 s y se reenvía, sin esperar 8 min",
+    askWhereToSave: true, dest: "folder", timeoutMin: 9,
+    u2: "real=1&emptyReply=1", u3: "real=1",
+    expect: { u2: "done", u3: "done", scenes: { 1: "ddd", 2: "ddd", 3: "ddd" }, approvals: { u2: 2, u3: 1 }, files: FILES, immediate: true, logHas: ["el Agent no contestó nada"] },
+  },
   busyagent: {
     desc: "PRUEBA REAL v2.10 (cuenta 2): tras las imágenes el Agent sigue trabajando ~40 s sin botón de generar: se espera a que vuelva (sin re-adjuntar la imagen ni gastar los intentos)",
     askWhereToSave: true, dest: "folder",
@@ -405,6 +429,7 @@ async function runScenario(name, sc, server) {
     check("ningún vídeo pedido sin su imagen ni con dos imágenes adjuntas", c2.multi + c3.multi + c2.noimg + c3.noimg === 0, `sin imagen=${c2.noimg + c3.noimg} dobles=${c2.multi + c3.multi}`);
     if (E.immediate) check("cada vídeo se descargó nada más generarse (sin pasada final de descargas)", !/Fase 2B: descargo/.test(logTxt) && (logTxt.match(/Guardado: /g) || []).length === 3);
     if (E.logHas) for (const t of E.logHas) check(`el log dice "${t}"`, logTxt.includes(t));
+    if (E.logNot) for (const t of E.logNot) check(`el log NO dice "${t}"`, !logTxt.includes(t));
     if (E.started) check("vídeos que Flow empezó a generar", c2.started === (E.started.u2 || 0), `u2=${c2.started}`);
     if (E.chatHas) check(`el reenvío remarca la duración ("${E.chatHas.u2}")`, c2.chat.includes(E.chatHas.u2));
     if (!sc.noFlow) check("las dos cuentas usan la MISMA carpeta nueva del lote", folder && b3 && b3.config.batchFolder === folder, folder);
@@ -512,7 +537,7 @@ async function main() {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(mock);
   }).listen(8443);
-  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "voicestop2", "music", "musiconly", "videoerror", "busyagent", "alwaysretry", "realtiles", "costen", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
+  const wanted = process.env.FBR_E2E ? process.env.FBR_E2E.split(",") : ["folder", "downloads", "resume", "misname", "placeholder", "sourcedl", "voice", "voiceonly", "voicebadtext", "voicepause", "voicestop2", "music", "musiconly", "videoerror", "realok", "realfail", "realpolicy", "realempty", "busyagent", "alwaysretry", "realtiles", "costen", "imgonly", "selfheal", "agentreply", "cost", "cost12", "noconfirm", "sequential", "dryrun", "dltest", "dupcost"];
   const all = [];
   try {
     for (const n of wanted) all.push(await runScenario(n, SCENARIOS[n], server));

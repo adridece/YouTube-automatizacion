@@ -19,6 +19,11 @@
   brokenUntilReload=1 (el "+" y "Animar" no funcionan hasta que se recarga la página una vez).
   placeholderTile=1 (PRUEBA REAL v2.7: mientras se genera hay además un flow-video-tile PROVISIONAL sin "%" ni vídeo
     y sin "Descargar"; al terminar se sustituye por el definitivo y Flow redibuja todos los tiles de vídeo),
+  real=1 (DOM MEDIDO EN FLOW REAL el 30 sep 2026: el vídeo terminado lleva <img class=thumbnail> y NO <video>; mientras
+    se genera hay un flow-video-tile PROVISIONAL sin ninguna imagen; el botón de generar está deshabilitado con la caja vacía;
+    un fallo deja una tarjeta <flow-error-tile> en el chat y ningún tile). Con real=1: videoErrorTile=N → tarjeta de error;
+    stallTile=N → el provisional se queda SIN miniatura al desaparecer el pending (caso u3); emptyReply=K → el K-ésimo envío
+    de vídeo no recibe respuesta alguna (Agent vacío).
   noMenuDownload=1 (el menú de los vídeos no tiene "Descargar": solo sirve la descarga directa de la fuente).
   Cada vídeo generado "sabe" de qué escena es (la imagen adjunta) y su descarga pesa 350000 + nº de escena
   bytes: así la prueba comprueba que cada archivo es el vídeo CORRECTO.
@@ -82,6 +87,7 @@ if (P.get("pm") && window.PM) {
 }
 const promptText = () => (pmView ? pmView.state.doc.textContent : editor.textContent).trim();
 const clearPrompt = () => { if (pmView) pmView.dispatch(pmView.state.tr.delete(0, pmView.state.doc.content.size)); else editor.textContent = ""; };
+const REAL = !!P.get("real");
 const assets = []; // más recientes primero: { name, kind, tile }
 let videoSends = 0;
 const blockedOnce = new Set();
@@ -98,7 +104,8 @@ new MutationObserver(persist).observe(grid, { childList: true, subtree: true, ch
 function addTile(tag, name, src) {
   const t = document.createElement(tag);
   if (tag !== "flow-pending-tile") {
-    if (tag === "flow-video-tile") { const v = document.createElement("video"); v.setAttribute("src", src || `/media/${uid()}.mp4`); t.appendChild(v); }
+    if (tag === "flow-video-tile" && REAL) { const i = document.createElement("img"); i.className = "thumbnail"; i.alt = "Miniatura de vídeo generada"; i.setAttribute("src", src || `/media/${uid()}.png`); t.appendChild(i); }
+    else if (tag === "flow-video-tile") { const v = document.createElement("video"); v.setAttribute("src", src || `/media/${uid()}.mp4`); t.appendChild(v); }
     else { const i = document.createElement("img"); i.setAttribute("src", src || `/media/${uid()}.png`); t.appendChild(i); }
     const f = document.createElement("div"); f.className = "footer-title"; f.textContent = name; t.appendChild(f);
   }
@@ -116,6 +123,7 @@ window.__sends = 0;
 // needsTrusted=1: solo acepta clics/teclas REALES (isTrusted); needsFocus=1: solo
 // envía si la página tiene el foco (lo que parece hacer Flow real, log v2.4.0).
 let lastClickTrusted = false;
+if (REAL) { const gb0 = document.querySelector("flow-generate-icon-button button"); setInterval(() => { gb0.disabled = !promptText(); }, 100); }
 document.querySelector('flow-generate-icon-button button').addEventListener("click", (e) => { lastClickTrusted = e.isTrusted; }, true);
 document.getElementById("form").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -177,6 +185,8 @@ function askVideoCost(text, label) {
   label = (String(label || "").match(/\d{3}/) || [""])[0];
   videoSends++;
   if (P.get("rateLimitVideo") === String(videoSends)) { say('Estás preguntando demasiado rápido. Ve más despacio e inténtalo de nuevo. <button>Reintentar</button>'); return; }
+  // emptyReply=K (visto en vivo, 30 sep): el Agent no contesta NADA (ni coste, ni error, ni texto).
+  if (P.get("emptyReply") === String(videoSends)) return;
   // agentQuestion=1: al 1.er vídeo el Agent CONTESTA con una pregunta y no genera nada.
   if (P.get("agentQuestion") && videoSends === 1) { setTimeout(() => say("Antes de generar: ¿quieres que el movimiento de cámara sea más lento o más rápido? Dímelo y lo preparo."), 1500); return; }
   const seq = (P.get("costSeq") || "").split(",").filter(Boolean).map(Number);
@@ -214,16 +224,24 @@ function startVideo(text, label) {
       sessionStorage.setItem("mockPendingVideo", "1");
       sessionStorage.setItem("mockPendingLabel", label || "");
       const p = addTile("flow-pending-tile");
-      const ph = P.get("placeholderTile") ? addTile("flow-video-tile", "Animate", "/media/thumb.png") : null;
-      if (ph) { ph.querySelector("video").remove(); const i = document.createElement("img"); i.setAttribute("src", "/media/thumb.png"); ph.prepend(i); ph.dataset.placeholder = "1"; }
+      const ph = P.get("placeholderTile") || REAL ? addTile("flow-video-tile", "Animate", "/media/thumb.png") : null;
+      if (ph && REAL) { ph.querySelectorAll("img,video").forEach((x) => x.remove()); ph.dataset.placeholder = "1"; } // real: el provisional NO tiene ninguna imagen
+      else if (ph) { ph.querySelector("video").remove(); const i = document.createElement("img"); i.setAttribute("src", "/media/thumb.png"); ph.prepend(i); ph.dataset.placeholder = "1"; }
       const wantName = (text.match(/cambia el nombre de este vídeo exactamente a: (\S+)\)/) || [])[1];
       setTimeout(() => {
         p.remove();
+        // real + stallTile=N: el tile provisional se queda SIN miniatura para siempre (fallo silencioso, caso u3)
+        if (REAL && +(P.get("stallTile") || 0) >= videoSends) { sessionStorage.setItem("mockPendingVideo", "0"); return; }
         if (ph) ph.remove();
         if (ph) setTimeout(rerenderVideos, 400); // SIM: Flow redibuja la cuadrícula (tiles NUEVOS, mismos vídeos)
         if (P.get("policyVideo") && videoSends <= +P.get("policyVideo")) { say("Esta generación de vídeo fue bloqueada por nuestras políticas de seguridad. No se te ha cobrado."); sessionStorage.setItem("mockPendingVideo", "0"); return; }
         // videoErrorTile=N (prueba real v2.10): los N primeros vídeos FALLAN en Flow: queda un tile de
         // vídeo SIN vídeo con un aviso de error (y su menú "Descargar" no entrega nada).
+        if (REAL && +(P.get("videoErrorTile") || 0) >= videoSends) {
+          sessionStorage.setItem("mockPendingVideo", "0");
+          say('<flow-error-tile><div class="error-message"><div class="error-title">Error</div><div class="error-subtitle"><span class="error-message-text">Se ha producido un error. Inténtalo de nuevo.</span></div></div></flow-error-tile> He puesto en marcha la generación de tu vídeo. Está en la cola de procesamiento.');
+          return;
+        }
         if (+(P.get("videoErrorTile") || 0) >= videoSends) {
           sessionStorage.setItem("mockPendingVideo", "0");
           const et = addTile("flow-video-tile", "errorAlgo ha ido mal. Inténtalo de nuevo");
@@ -253,7 +271,8 @@ function finalizeVideo(wantName, label) {
   const t = addTile("flow-video-tile", "Animate " + uid(), `/media/${uid()}${label ? "-s" + label : ""}.mp4`);
   // realTiles=1 (como Flow REAL, log v2.10: "sin identificador estable (seq)"): el tile no trae <video> ni
   // ids, y al terminar cada vídeo Flow REDIBUJA la cuadrícula (todos los tiles son nodos nuevos).
-  if (P.get("realTiles")) { t.dataset.scene = label || ""; t.querySelector("video").remove(); setTimeout(rerenderVideos, 300); }
+  if (REAL) { t.dataset.scene = label || ""; setTimeout(rerenderVideos, 300); }
+  if (P.get("realTiles")) { t.dataset.scene = label || ""; const vv = t.querySelector("video"); if (vv) vv.remove(); setTimeout(rerenderVideos, 300); }
   if (P.get("wrongRename")) setTimeout(() => { t.querySelector(".footer-title").textContent = "mundofut_001_0000"; }, 1000);
   assets.unshift({ name: "Animate", kind: "Vídeo", tile: t });
   // SIM: el Agent renombra el vídeo si se lo piden (salvo noRename=1).

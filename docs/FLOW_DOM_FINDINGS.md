@@ -169,3 +169,12 @@ deja de funcionar, lo primero es re-comprobar esta lista con `tools/flow-diagnos
 - **[V por el usuario, 29 sep]** HeyGen solo deja **previsualizar la voz 3 veces al día**; sin previsualización no hay audio en la red.
 - **[V por el usuario, 29 sep]** El botón exacto es el `<button>` dentro de ese div (`… > div:nth-child(1) > div > button`).
 - **[V-indirecto, log v2.9.1]** Tras pegar, el guion muestra la narración con otro formato (no idéntico carácter a carácter).
+
+## Ciclo de vida REAL de un vídeo (medido en vivo el 30 sep 2026, cuenta Pro; 1 vídeo de 10 puntos)
+- **[V]** Enviado el prompt → el Agent "piensa" (botón de enviar = ■) → aviso «¿Quieres que empiece a generar 1 video, que cuesta 10 puntos?» con Aprobar / Aprobar siempre / Rechazar (en inglés si el prompt va en inglés) → `flow-pending-tile` (+ un `flow-video-tile` PROVISIONAL sin ninguna imagen, hermano del pending, no dentro) → aparece `%` → **la miniatura aparece ~4 s antes de que `pending` baje a 0** → terminado.
+- **[V]** Un vídeo TERMINADO: `flow-video-tile > div.container > img.thumbnail[alt="Miniatura de vídeo generada"][src=https://flow.google.com/asb/…]`, **sin `<video>`**. Texto: `play_circle favorite redo more_vert play_circle <prompt>`. Botones del hotbar con aria-label «Marcar como favorito», «Reutilizar petición», «Más opciones». La miniatura da una clave estable (`img:<src sin query>`).
+- **[V]** El clic derecho sintético (`contextmenu`) sobre ese tile abre el menú con «Descargar» (y Copiar, Cambiar nombre, Compartir, Publicar en YouTube, Mover a la papelera…).
+- **[V]** **Un fallo de Flow** deja una tarjeta `flow-error-tile` (dentro de `div.video-container`, en el CHAT) con `.error-title` «Error» y `.error-message-text` «Se ha producido un error. Inténtalo de nuevo.», y **ningún** tile en la cuadrícula. El Agent, aun así, puede escribir después «He puesto en marcha la generación… está en cola»: **el texto del Agent NO es fiable como estado**.
+- **[V]** El Agent puede contestar **VACÍO** (solo los iconos de valorar) tras un envío: sin aviso de coste ni error.
+- **[V]** «Iniciar generación» (`flow-generate-icon-button > button[type=submit]`) está `disabled` siempre que la caja esté vacía: NO es señal de "ocupado". Mientras el Agent trabaja se ve ■ (selector exacto del botón de parar: [SUPUESTO], la extensión lo detecta por icono/etiqueta stop/parar/cancelar/pausar).
+- **[SUPUESTO]** El aspecto exacto del aviso por POLÍTICAS (en la prueba real se detectó por el texto del Agent, no por DOM).
